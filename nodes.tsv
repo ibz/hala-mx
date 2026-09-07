@@ -1,0 +1,14 @@
+# Theoretical breathing path - 11 nodes
+# X = width (m), Y = length (m), Z = height (m), angle = re-estimated azimuth
+# node	role	X	Y	Z	angle
+S1	Base / Start Inhale	0.0	-10.0	4.00	180
+S2	Lower left curve	-5.5	-8.0	3.25	-145
+S3	Lower left extreme	-11.0	-6.0	2.50	-118
+S4	Lower loop return	-4.0	-3.0	3.46	-127
+S5	Central node 1 (Transition)	0.0	-1.0	4.00	0
+S6	Center axis / Origin	2.0	0.0	4.00	90
+S7	Central node 2 (Transition)	0.0	1.0	3.72	0
+S8	Upper right loop	4.0	3.0	3.46	53
+S9	Upper right extreme	11.0	6.0	2.50	61
+S10	Upper right curve	5.5	8.0	4.00	34
+S11	Peak / Exhale	0.0	10.0	4.00	0

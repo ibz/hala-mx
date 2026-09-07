@@ -1,0 +1,15 @@
+# Physical layout, top-down plan of Hala MX (cm). Z = 180 cm for all.
+# X = hall length, Y = hall width
+# label	channel	X	Y
+M_A_1	1	487	300
+M_A_2	2	400	348
+M_A_3	3	313	300
+M_A_4	4	313	200
+M_A_5	5	400	152
+M_A_6	6	487	200
+M_B_1	7	487	800
+M_B_2	8	400	852
+M_B_3	9	313	800
+M_B_4	10	313	700
+M_B_5	11	400	652
+M_B_6	12	487	700
