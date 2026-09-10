@@ -174,9 +174,9 @@ Structure of one cycle:
    `sample_free` so it doesn't hit the scsynth 4096-buffer limit — both
    staggered, not batched, for the reason below.
 2. **Inhale** — stochastic clouds (a Poisson process, `play_cloud_phase`)
-   that descend and darken, panned continuously (not across discrete
-   channels) at constant power, and carrying the breath's **slope** as a
-   ramped Blauert band pair (§5).
+   that descend and darken, panned at constant power either continuously
+   between neighbouring channels or discretely onto one (`xen_pan_mode`, §5),
+   and carrying the breath's **slope** as a ramped Blauert band pair (§5).
 3. **M=0** — the critical point: a psychoacoustic "scalpel" above (HPF cut,
    flanger, 8 kHz Blauert accent) and a "funnel" below (LPF, distortion),
    offset by 35 ms (Haas effect), riding on the burst pre-rendered by
@@ -471,6 +471,65 @@ first thing to try; the knob is live either way.
 > filters' gains (9 + 6). Measured in-band on real material it is 6–8 dB,
 > because at Q 1.414 the response falls off inside the measurement band.
 
+### Placing a grain — `xen_pan_mode`
+
+Continuous panning splits every grain across the two channels either side of
+its position, at constant power, so the cloud moves as a **phantom image**
+gliding between speakers. That was the original design and it is still the
+default. The in-situ measurements gave three reasons to have an alternative:
+
+- **Early reflections sit inside the fusion window.** Arrivals at 0.62, 1.60
+  and 4.96 ms at −14 to −16 dB re direct are exactly what broadens and shifts
+  a phantom — and `C80` scores them as clarity, so the clarity plot looks
+  excellent while the image is being smeared.
+- **Moving air modulates the top end.** 2–3 m/s in the hall, against a 4.1 cm
+  wavelength at 8372 Hz.
+- **A phantom only holds in a sweet spot.** Off axis the precedence effect
+  collapses it onto the nearer speaker. A real source cannot collapse — and
+  this is an installation people walk through.
+
+`:discrete` sends each grain **whole to one channel**, chosen probabilistically,
+and lets the ear assemble the trajectory from the sequence the way it reads
+apparent motion.
+
+**The fold is by power share, not by position.** A grain at fractional position
+`frac` between channels goes to the upper one with probability
+`sin²(frac·π/2)` and the lower with `cos²(frac·π/2)` — the same weights the
+continuous law uses, squared:
+
+```ruby
+p_upper = Math.sin(frac * Math::PI / 2) ** 2
+pick    = (rand < p_upper) ? ch + 1 : ch
+events << ev.merge(chan: pick, amp: intensity)
+```
+
+That makes the expected power on a channel `P(ch) · intensity² = cos²(…) ·
+intensity²`, which is precisely what continuous mode puts there. **The spatial
+distribution of energy is identical; only its granularity changes** — so an A/B
+between the modes tells you about placement and nothing about level. Verified
+by simulation over 130k events: per-channel power matches within 0.14 dB and
+total within 0.03 dB, on both the 4- and 12-output rigs.
+
+The obvious alternative — a linear `P(upper) = frac` — is subtly wrong: it
+matches the *amplitude* law rather than the power law, and pulls energy toward
+the channel boundaries.
+
+Carrying the full `intensity` rather than `intensity/√2` is the other half of
+the equivalence: all the power goes to the one speaker, so per-grain radiated
+power is unchanged too.
+
+> **It halves the voice count.** Discrete emits one event per grain instead of
+> two, measured at **0.58×** — the inhale's ~64 voices/s become ~37. Free
+> headroom on the layer that has historically been the expensive one (see
+> *Grain density* above).
+
+**M=0 is untouched** — its quads are already discrete placements, so the mode
+applies only to the inhale and exhale clouds.
+
+The trade is granularity: at low density a discrete cloud can start to read as
+separate points rather than as movement. That can only be judged in the room,
+which is why this is a live parameter — flip it mid-run while walking the hall.
+
 ### Blauert band width
 
 The one number in the file that was quietly wrong, and it was wrong
@@ -649,6 +708,7 @@ set :xen_atmos_stretch, 1.0 # 1.0 = harmonic, >1 = stretched
 set :xen_atmos_res, 0.94   # HIGHER = NARROWER (rq = 1 − res)
 set :xen_breath_slope, 12.0 # the score's α/β, in degrees — see "The slope"
 set :xen_blauert, 0.75     # how strongly the slope is voiced, 0.0 = off
+set :xen_pan_mode, :continuous # :continuous (phantom) | :discrete (one speaker per grain)
 set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
 set :xen_enhance_threshold, 0.2   # beds + clouds only; all of M=0 stays at unity
 set :xen_master_amp, 1.0

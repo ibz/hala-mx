@@ -66,6 +66,21 @@ set :xen_blauert, 0.75     # how strongly the slope is voiced
                            # band ratio 4-6 dB, well inside Blauert's range.
                            # Raise to 1.0 if the exhale can afford it - that
                            # restores tilt 1.0 == M=0's chord exactly
+set :xen_pan_mode, :continuous # :continuous | :discrete
+                           # how a grain is placed. :continuous splits it
+                           # across the two channels either side of its
+                           # position (a phantom image gliding between
+                           # speakers); :discrete sends it whole to ONE,
+                           # picked with that channel's power share.
+                           # The in-situ capture argues for trying :discrete
+                           # in the hall: reflections at 0.62/1.60/4.96 ms
+                           # (-14..-16 dB) broaden a phantom, 2-3 m/s of air
+                           # phase-modulates 8 kHz, and a phantom collapses
+                           # off-axis while a real source does not - which
+                           # matters when the audience walks around.
+                           # Energy per channel is IDENTICAL either way, so
+                           # an A/B is about placement, not level. Discrete
+                           # also halves the voice count (0.58x measured)
 set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
                            # on beds + clouds; all of M=0 stays at unity
 set :xen_enhance_threshold, 0.2 # where the 118 decides a signal is "quiet"

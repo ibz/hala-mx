@@ -333,6 +333,10 @@ define :play_cloud_phase do |o|
   # phase this method produced before the slope existed.
   bl = o[:blauert] || { hi_note: 120, lo_note: 103, res: 0.293,
                         hi_from: 0.0, hi_to: 0.0, lo_from: 0.0, lo_to: 0.0 }
+  # Placement mode, handed in for the same reason as the rest. Defaults to
+  # :continuous, so a caller that says nothing gets the phantom-image panning
+  # this method has always produced.
+  discrete = o[:pan_mode] == :discrete
   # --- the drawing's bounds, so we can fold it onto a smaller rig ---
   lo_d = o[:clouds].map { |c| [c[:span0][0], c[:span1][0]].min }.min
   hi_d = o[:clouds].map { |c| [c[:span0][1], c[:span1][1]].max }.max
@@ -377,6 +381,30 @@ define :play_cloud_phase do |o|
       # constant power: amp_a^2 + amp_b^2 = intensity^2
       amp_a = intensity * Math.cos(frac * Math::PI / 2)
       amp_b = intensity * Math.sin(frac * Math::PI / 2)
+      # PROBABILISTIC FOLD (discrete mode). The grain goes WHOLE to one of the
+      # two channels, picked with the probability equal to the POWER share the
+      # continuous law would have given it: cos^2 for the lower, sin^2 for the
+      # upper. That is not a detail - it is what makes the two modes
+      # comparable. The expected power on channel `ch` is
+      #     P(ch) * intensity^2 = cos^2(...) * intensity^2 = amp_a^2
+      # which is exactly what continuous mode puts there. So over a phase the
+      # spatial distribution of energy is IDENTICAL; only its granularity
+      # changes, and an A/B tells you about placement rather than about level.
+      # Carrying the full `intensity` (not intensity/sqrt2) is the other half
+      # of that: all the power goes to the one speaker, so total radiated
+      # power per grain is unchanged too.
+      #
+      # A linear P(ch+1) = frac would have been the obvious guess and is
+      # subtly wrong: it matches the AMPLITUDE law, not the power law, and
+      # would pull energy toward the channel boundaries.
+      #
+      # Side effect worth knowing: discrete emits ONE event per grain instead
+      # of two, measured at 0.58x over 130k events - the inhale's ~64 voices/s
+      # become ~37. (Not exactly half: continuous already drops the events
+      # that fall under the 0.05 amp threshold near a channel's own position.)
+      # Free headroom on the layer that has historically been the expensive
+      # one (see xen_density).
+      p_upper = Math.sin(frac * Math::PI / 2) ** 2
 
       pool = c[:pool]
       cut = pool[:cuts].choose
@@ -385,8 +413,16 @@ define :play_cloud_phase do |o|
 
       ev = { t: t, wav: pool[:wav], start: cut[:start], finish: cut[:finish],
              rate: rate, lpf: lpf }
-      events << ev.merge(chan: ch,     amp: amp_a) if amp_a > 0.05
-      events << ev.merge(chan: ch + 1, amp: amp_b) if amp_b > 0.05
+      if discrete
+        # At the very top of the range pos == rig exactly, so frac == 0 and
+        # p_upper == 0: the pick can never be ch + 1, which is off the rig.
+        # Same guard the continuous branch gets from `amp_b > 0.05`.
+        pick = (rand < p_upper) ? ch + 1 : ch
+        events << ev.merge(chan: pick, amp: intensity) if intensity > 0.05
+      else
+        events << ev.merge(chan: ch,     amp: amp_a) if amp_a > 0.05
+        events << ev.merge(chan: ch + 1, amp: amp_b) if amp_b > 0.05
+      end
     end
   end
   events.sort_by! { |e| e[:t] }
@@ -700,6 +736,28 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
          "clamped. That is a page angle from the drawing, not a hall angle."
   end
 
+  # HOW A GRAIN IS PLACED - :continuous (the original) or :discrete.
+  #
+  # Continuous splits every grain across the two channels either side of its
+  # position, at constant power, so the cloud moves as a phantom image gliding
+  # between speakers. That image is the most fragile thing in the piece here.
+  # The in-situ capture found reflections at 0.62 / 1.60 / 4.96 ms at -14 to
+  # -16 dB re direct - inside the fusion window, where they broaden and shift
+  # a phantom - and 2-3 m/s of air movement in the hall phase-modulates 8 kHz,
+  # whose wavelength is 4.1 cm. A phantom also only holds in a sweet spot: off
+  # axis the precedence effect collapses it onto the nearer speaker, and this
+  # is an installation people walk through.
+  #
+  # Discrete sends each grain WHOLE to ONE speaker, chosen probabilistically
+  # (see the fold below). A real source cannot collapse, so the image stays put
+  # from every seat, and the ear reconstructs the trajectory from the sequence
+  # the way it reads apparent motion. The trade is granularity: at low density
+  # the cloud can start to read as separate points rather than as movement.
+  #
+  # Kept as a live switch precisely because that trade can only be judged in
+  # the room. Flip it mid-run while walking the hall.
+  pan_mode    = get(:xen_pan_mode, :continuous)
+
   # REAL GEOMETRY (Hala MX floor plan + the Aug 6 sketch):
   # 12 physical monitors, ALL at the same height, Z = 1.8 m, arranged in two
   # HORIZONTAL hexagons, side by side along the length of the hall:
@@ -888,6 +946,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
     if grains_on
       play_cloud_phase dur: inhale_dur, rig: rig_outputs,
                        enh_thr: enh_thr, enh_below: enh_below, enh_above: enh_above,
+                       pan_mode: pan_mode,
                        pitch_from: 1.4, pitch_to: 0.95, pitch_jit: 0.04,
                        lpf_from: 120,   lpf_to: 75,     lpf_jit: 3,
                        amp_lo: 0.155 * master_amp, amp_hi: 0.31 * master_amp,
@@ -1003,6 +1062,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       # ground.
       play_cloud_phase dur: exhale_dur, rig: rig_outputs,
                        enh_thr: enh_thr, enh_below: enh_below, enh_above: enh_above,
+                       pan_mode: pan_mode,
                        pitch_from: 0.8, pitch_to: 1.34, pitch_jit: 0.06,
                        # lpf_from matters MORE than the amplitude here:
                        # the "shatter" material loses 10.5 dB through the
