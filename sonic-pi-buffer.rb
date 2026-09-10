@@ -5,7 +5,70 @@
 # ============================================
 
 set :xen_rig_outputs, 4    # 12 = Hala MX, 4 = UMC404HD in the studio
-set :xen_focus, :inhale    # :inhale :exhale :m0 :m0_ceil :m0_floor :all
+set :xen_focus, :all       # :inhale :exhale :m0 :m0_ceil :m0_floor :all
+set :xen_layers, :both     # :both :atmos (beds only) :grains (granular only)
+set :xen_density, 1.0      # grain density multiplier. 0.5 was the workaround for
+                           # 5.0's watchdog; 4.6 runs full density (see README 7)
+set :xen_sched_ahead, 3.0  # scheduling lookahead for the breath loop. M=0 fires
+                           # 16 threads inside 35 ms and overruns the 0.5 default
+                           # by ~1.1 s (measured 1041/1192/1116 ms across three
+                           # runs); 3.0 takes that to 4 ms.
+                           # NOT free: lookahead is also queue depth, so this is
+                           # ~6x more timestamped bundles parked in scsynth and
+                           # ~228 nodes stranded per Stop rather than ~76. See
+                           # README 4, "Lookahead, and why Stop is dangerous" -
+                           # on 4.6 the tradeoff is spikes vs. Stop safety, not
+                           # spikes vs. the piece dying, which is what it was on 5.0
+set :xen_atmos_amp, 0.5    # the atmosphere bed - sits OVER the granular material
+                           # rig-compensated: the same number is the same balance
+                           # on 4 outputs in the studio and on 12 in the hall
+set :xen_atmos_m0_amp, 0.75 # the atmosphere accent at M=0 - over the bed
+set :xen_m0_ceil_amp, 0.85 # M=0's granular scalpel, trimmed -15% so the atmosphere
+                           # accent - same speakers, same 8 kHz band - can be heard
+set :xen_m0_floor_amp, 1.0 # M=0's funnel. Left alone on purpose: it is LPF'd at
+                           # 466 Hz on other speakers, so it hides nothing and
+                           # pulling it down only costs the weight at the feet
+set :xen_atmos_spectral, 10.0 # depth in dB of the beds' resonant partials
+                           # turns the four broadband beds into four partials of
+                           # one spectrum: noise in, pitch out.
+                           # 10 measured: tonal prominence at the partial goes
+                           # 2.3 -> 11.6 dB (clearly pitched, not a whistle) for
+                           # +0.57 dB RMS. Headroom is NOT the limit here - two
+                           # beds summing on one speaker at 4 outputs peak 0.250
+                           # with this on, and the tanh takes 0.18 dB. Even 15
+                           # only reaches 0.287, so this is a taste knob, not a
+                           # safety one
+set :xen_atmos_f0, 48      # MIDI - C3, 130.8 Hz, measured: 81.5% of the beds'
+                           # energy is in 125-500 Hz and the family peaks are
+                           # 145 / 192 / 132 / 127 Hz.
+                           # Re-checked against alternatives and 48 is the right
+                           # one: at MIDI 36 partial 1 lands on 65 Hz where the
+                           # bed has -27 dB and does not ring at all (prominence
+                           # 0.2 dB); MIDI 43 weakens partial 1 the same way.
+                           # At 48 all four partials ring 9.7-13.4 dB
+set :xen_atmos_stretch, 1.0 # 1.0 = harmonic partials, >1 = stretched/bell-like
+set :xen_atmos_res, 0.94   # band width: HIGHER = NARROWER (rq = 1 - res), 0.94 ~ Q 17
+set :xen_breath_slope, 12.0 # the score's alpha/beta, in degrees - the breath drops
+                           # from 4.00 m to the 1.80 m speaker plane by M=0.
+                           # NOT the -25/-30 on the drawing: those are page
+                           # angles of the axonometric and land under the floor
+set :xen_blauert, 0.75     # how strongly the slope is voiced
+                           # 1.0 = the same band tilt M=0 states its 'above'
+                           # with. 0.75 because the pair is NOT symmetric on
+                           # this material: the inhale ends at lpf 8372, right
+                           # on the +9 dB band, so it gains (+2.4 dB peak at
+                           # 1.0), while the exhale ends at lpf 5274 - the
+                           # +9 dB sits ABOVE its knee and only the -6 dB at
+                           # 3136 Hz lands, where the shatter actually lives.
+                           # At 1.0 that costs the exhale -3.5 dB RMS, which
+                           # works against a phase whose job is to open up.
+                           # 0.75 holds it to -2.7 dB and still swings the
+                           # band ratio 4-6 dB, well inside Blauert's range.
+                           # Raise to 1.0 if the exhale can afford it - that
+                           # restores tilt 1.0 == M=0's chord exactly
+set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
+                           # on beds + clouds; all of M=0 stays at unity
+set :xen_enhance_threshold, 0.2 # where the 118 decides a signal is "quiet"
 set :xen_master_amp, 1.0   # overall trim - the discrete outputs do NOT go through the limiter
 set :xen_bleep, true       # studio reference: a beep at the cycle boundaries (OFF in the hall)
 set :xen_seed, 0           # which rendition of the piece; changing it needs Stop + Run
@@ -27,17 +90,53 @@ set :xen_project_dir, File.dirname(piece)
 # an mtime there would have blocked the reload after Stop + Run.)
 last_mtime = nil
 
-live_loop :reloader do
+# run_tag: local as well, so it's fresh on every Run and stable for the whole
+# life of that Run. The piece suffixes its live_loop names with it.
+#
+# Sonic Pi's named-thread registry (@named_subthreads, runtime.rb) is global to
+# the process, and `live_loop :foo` is just `in_thread name: :live_loop_foo`. If
+# the name is already registered the new thread is KILLED before its block runs
+# - the only trace is "Thread :live_loop_foo exists: skipping creation" in the
+# log pane. A name is released only once EVERY subthread of the job that owns it
+# has died, and that wait has no timeout. This piece leaves thousands of grain
+# threads behind, so a few seconds after Stop the old names are still held: the
+# next Run would evaluate the whole library (samples and all) and then quietly
+# fail to start a single loop. Silence, with no error, until Sonic Pi is killed.
+#
+# A per-Run suffix means a new Run's loops can never collide with the previous
+# Run's corpse. It stays constant across hot reloads, so those still hot-swap
+# the loop body exactly as before.
+#
+# THIS LOOP NEEDS IT TOO, and it is the worse case of the two: if :reloader is
+# the name that is still held, the new Run never even reaches `run_file`, so
+# the library is never evaluated and NOTHING happens - the workspace's
+# top-level code runs and that is all.
+run_tag = (Time.now.to_f * 1000).to_i
+set :xen_run_tag, run_tag
+
+live_loop "reloader_#{run_tag}".to_sym do
   # Purely administrative loop: triggers no sound, so timing precision means
-  # nothing here. Preloading the library (1536 files, with allocations
-  # serialized on a single mutex) keeps the Ruby process busy for a few
-  # seconds, and with the default tolerance Sonic Pi kills the reloader with
-  # a TimingError right during that load. sched_ahead is thread-local, so
-  # here we make it effectively infinite without affecting the piece.
-  use_sched_ahead_time 60
+  # nothing here. This was 60 so a TimingError could not kill the reloader
+  # while the library loaded - but sched_ahead is also how long each `set`
+  # parks a raw Thread.new in the GUI-message path (runtime.rb:618/1919).
+  # Those are not job subthreads, so Stop leaves them running; at 60 they
+  # accumulated until the message queue backed up and a later Run could no
+  # longer start its live_loops. run_file returns as soon as it has spawned
+  # the piece's own Run, so this loop is never actually busy for seconds.
+  use_sched_ahead_time 2.0
   m = File.mtime(piece).to_f
   if m != last_mtime
+    fresh_run = last_mtime.nil?
     last_mtime = m
+    # A load_sample whose /b_allocRead misses scsynth's hard-coded 5s deadline
+    # dies in a detached thread: the half-allocated buffer stays in the
+    # studio's @samples cache forever, and everything that later asks it for
+    # num_frames blocks for good (LazyBuffer waits on a Promise with NO
+    # timeout). The cache is only cleared on boot, so after a Stop + Run the
+    # piece would stay silent until Sonic Pi was killed. Starting each Run from
+    # an empty cache throws any such corpse away. Only on a fresh Run, never on
+    # a hot reload - there it would free buffers that are currently sounding.
+    sample_free_all if fresh_run
     run_file piece
   end
   sleep 0.5

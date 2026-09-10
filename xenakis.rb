@@ -5,6 +5,7 @@
 #
 #   set :xen_rig_outputs, 4        # 12 = Hala MX, 4 = UMC404HD in the studio
 #   set :xen_focus, :inhale        # :inhale :exhale :m0 :m0_ceil :m0_floor :all
+#   set :xen_layers, :both         # :both :atmos (beds only) :grains (granular only)
 #
 # They're read at the start of every breath, so they can change on the fly.
 
@@ -18,11 +19,29 @@ path_inhale = path_base + "inhale/"
 path_blast  = path_base + "sonic_blast_m0/"
 path_exhale = path_base + "exhale/"
 
+# run_tag: also from the workspace, one value per Run (see sonic-pi-buffer.rb
+# for why). Every named live_loop below carries it, so the loops of a new Run
+# never collide with the still-dying loops of the previous one - a collision
+# gets the new loop killed silently, before its block ever runs.
+run_tag = get(:xen_run_tag, 0)
+
 use_bpm 60
 
-# Lookahead: the M=0 rain is a short, very dense burst, and with the default
-# 0.5s the threads can't queue it in time (TimingError). For an installation,
-# latency doesn't matter.
+# Lookahead. This is ALSO how many grain triggers sit queued inside scsynth
+# at any moment, and that is what makes Stop dangerous: on Stop the group dies
+# first, every already-queued /s_new then fails ("Group N not found"), and
+# those nodes never get an /n_go - so they stay in the group's @pending_nodes
+# forever. Group#initialize (group.rb:26) registers an on_destroyed callback
+# that emits one synthetic /n_end per pending node, and it runs ON Sonic Pi's
+# event-consumer thread, pushing into the same 50-slot SizedQueue that thread
+# is the only consumer of (incomingevents.rb:23). Enough pending nodes and the
+# consumer blocks on its own queue for good: the scsynth reader stops being
+# read, Node/Group creation blocks, and no later Run can start a live_loop -
+# silent, no error, until Sonic Pi is restarted.
+#
+# At 2.0 that was ~76 grains/s x 2s ~= 150 stranded nodes per Stop. 1.0 halves
+# it. The original reason for a large value is gone: the M=0 rain that could
+# not be queued at 0.5s is pre-rendered now (8 triggers, not ~144).
 #
 # NOTE: `use_sched_ahead_time`, NOT `set_sched_ahead_time!`.
 # The `!` variant writes to a global state, and reading it back
@@ -31,7 +50,7 @@ use_bpm 60
 # variant without `!` sets a thread-local, which is checked FIRST (`||`) and
 # can never be nil. System thread-locals are inherited, so the live_loop and
 # all of its per-channel threads pick it up automatically.
-use_sched_ahead_time 2.0
+use_sched_ahead_time 1.0
 
 # 0. GRAIN POOLS - A SINGLE BUFFER PER FAMILY
 #
@@ -153,8 +172,93 @@ atmos_margin = 1.0
 # and the geometric midpoint of the bridge between the hexagons (N_6, Y = 500
 # cm). The atmos and granular centers have to coincide.
 m0_center    = 8.0
-cloud_positive = { span0: [1.0, 3.0], span1: [4.0, 6.0], lambda: 24.0 }
-cloud_negative = { span0: [2.0, 4.0], span1: [3.0, 5.0], lambda:  8.0 }
+# Density multiplier. Each layer runs clean alone; only beds+grains together
+# drive the device below real-time (0.90x at bs=1024, 0.92x at 2048 - barely
+# helped by doubling the buffer, so it is voice COUNT, not burst headroom).
+# lambda is grains/second and each grain is panned across two channels, so
+# 24+8 = 32/s becomes ~64 voices/s created and freed. This scales all of it.
+xen_density = get(:xen_density, 1.0)
+cloud_positive = { span0: [1.0, 3.0], span1: [4.0, 6.0], lambda: 24.0 * xen_density }
+cloud_negative = { span0: [2.0, 4.0], span1: [3.0, 5.0], lambda:  8.0 * xen_density }
+
+# 0c-bis. THE BREATH'S HEIGHT - the only slope that is real
+#
+# The score sheet annotates the inhale "-25 deg" and the exhale "-30 deg".
+# Those are ANGLES ON THE PAGE, not angles in the hall: they are what the
+# hall's LENGTH axis measures once an axonometric projection tips it up the
+# sheet. Two independent checks say so.
+#
+#   1. They don't fit. The inhale run S1 -> S6 is 10.20 m horizontally
+#      (nodes.tsv). At -25 deg that is dZ = -4.76 m, landing at Z = -0.76 m;
+#      the exhale at -30 deg lands at Z = -1.89 m. Both are under the floor.
+#   2. They carry no height at all. Reconstruct the drawing's viewpoint
+#      (elev ~21 deg, azim ~-49 deg) and the node coordinates reproduce them
+#      - the exhale chord S6 -> S11 projects to 30.0 deg on the nose - while
+#      S1, S5, S6 and S11 all sit at Z = 4.00 in nodes.tsv. Force every Z in
+#      those chords flat and the page angle does not move a tenth of a degree.
+#
+# The alpha/beta annotation, -12 deg / +12 deg, is the one that means
+# something, and it isn't decorative either:
+#
+#   4.00 m (S1, the theoretical start) - 10.20 m * tan(12 deg)
+#     = 4.00 - 2.17 = 1.83 m  ~=  1.80 m, the plane of all twelve monitors
+#
+# and +12 deg over the exhale's identical run comes back to exactly 4.00 m,
+# which is S11's Z. So the breath DESCENDS from the theoretical node height
+# onto the physical speaker plane, touches it at M=0 - the one moment the
+# piece renders height physically, the funnel at the feet - and rises back.
+#
+# Until now that descent was a sentence in a comment and nothing else: the
+# inhale and the exhale had no elevation cue whatsoever, and the only thing
+# drifting downward was the lpf ramp, which darkens as a side effect of
+# timbre rather than as a slope anyone set. Below, the angle is voiced.
+speaker_z  = 1.80    # monitors.tsv - Z = 180 cm, all twelve
+node_z     = 4.00    # nodes.tsv - S1 and S11, the start and the peak
+breath_run = 10.20   # m - the S1 -> S6 horizontal run, same as S6 -> S11
+
+# Height is SPECTRUM on this rig and nothing else - no speaker is overhead -
+# so the slope is carried by the same Blauert pair M=0 states its "above"
+# with (see the ceiling scalpel): MIDI 120 = 8372 Hz reads as above, MIDI
+# 103 = 3136 Hz as behind/below. Tilt 1.0 is exactly M=0's chord, tilt 0.0
+# is flat. That makes M=0 the full-scale reference for the whole piece: the
+# breath can never claim more height than the critical point does.
+blauert_hi_note = 120
+blauert_lo_note = 103
+blauert_hi_db   =  9.0
+blauert_lo_db   = -6.0
+# Band WIDTH, and the one number in this file that was quietly wrong for a
+# long time. The old comment at M=0 read "res = 1/Q: higher = wider band",
+# and both bands sat at 0.8 on that understanding. The synthdef says
+# otherwise: fx_band_eq is MidEQ(in, freq, rq, db) with `rq = 1 - res`, and
+# rq IS 1/Q - so higher res is a NARROWER band, the exact opposite. At 0.8
+# these were Q 5.0, about 0.29 octaves: a third of the width they were meant
+# to have, and a third of the width Blauert's bands actually are.
+#
+#   bandwidth_octaves = (2 / ln2) * asinh(1 / 2Q),  Q = 1 / (1 - res)
+#   res 0.293 -> rq 0.707 -> Q 1.414 -> 1.000 octave
+#
+# Blauert's directional bands are broad - they are a property of the pinna,
+# not a filter someone chose - so a narrow peak is the wrong shape for the
+# cue no matter how much gain it has. Everything Blauert in the piece uses
+# this: the M=0 scalpel, the M=0 atmosphere accent, and the ramped pair that
+# carries the breath's slope.
+blauert_res     = 0.293
+
+# Height -> tilt: how far above the speaker plane the breath is, normalized
+# so the theoretical node height is 1.0. Clamped, because this path never
+# goes below the speakers - an angle that drives it there is the -25 deg
+# mistake coming back, and xen_breath_slope says so out loud when it does.
+breath_tilt = lambda { |z| [[(z - speaker_z) / (node_z - speaker_z), 0.0].max, 1.0].min }
+
+# The band pair for a phase running from tilt a to tilt b. Built at the call
+# site, where these constants are in scope: `define` makes a method, so
+# play_cloud_phase cannot see any of them.
+blauert_ramp = lambda { |a, b, amt|
+  { hi_note: blauert_hi_note,          lo_note: blauert_lo_note,
+    res: blauert_res,
+    hi_from: blauert_hi_db * amt * a,  hi_to: blauert_hi_db * amt * b,
+    lo_from: blauert_lo_db * amt * a,  lo_to: blauert_lo_db * amt * b }
+}
 
 # M=0: how long the burst lasts at full density. The density and tail are
 # baked into the renders (render_m0.py: M0_TAIL, K_DENS, K_AMP).
@@ -175,6 +279,10 @@ m0_fade = 5.0
 # saturator, not the output level - you could cut them in half and barely
 # hear it. This is the one place where a reduction is actually audible.
 # 1.0 = what it used to be; 0.7 ~= -3 dB.
+#
+# The two halves of M=0 are trimmed SEPARATELY on top of this - see
+# xen_m0_ceil_amp / xen_m0_floor_amp - because only one of them is ever in
+# the atmosphere accent's way.
 m0_amp = 0.7
 
 # THE EXHALE'S CLOUDS - the same construction, mirrored.
@@ -196,8 +304,8 @@ inhale_pause = m0_tail - 0.035
 # The granular phases, equal and symmetric around m0_center.
 inhale_dur = m0_center - m0_dur / 2.0 - atmos_margin - inhale_pause - 0.035
 exhale_dur = cycle_dur - atmos_margin - (m0_center + m0_dur / 2.0 + m0_tail)
-cloud_exhale_positive = { span0: [7.0,  9.0], span1: [10.0, 12.0], lambda: 32.0, shape: 3 }
-cloud_exhale_negative = { span0: [8.0, 10.0], span1: [ 9.0, 11.0], lambda: 11.0, shape: 3 }
+cloud_exhale_positive = { span0: [7.0,  9.0], span1: [10.0, 12.0], lambda: 32.0 * xen_density, shape: 3 }
+cloud_exhale_negative = { span0: [8.0, 10.0], span1: [ 9.0, 11.0], lambda: 11.0 * xen_density, shape: 3 }
 
 # 0b. RE-SCALING A GESTURE OVER A SMALLER RIG
 # count positions distributed over n outputs, wrapping in a circle, so every
@@ -215,6 +323,16 @@ end
 # between neighboring speakers, at constant power (cos/sin), so the movement
 # is heard as motion, not as a series of jumps.
 define :play_cloud_phase do |o|
+  # The enhancer settings have to be handed in: `define` makes a method, so
+  # the breath loop's locals are not in scope here.
+  enh_thr   = o[:enh_thr]   || 0.2
+  enh_below = o[:enh_below] || 1.0
+  enh_above = o[:enh_above] || 1.0
+  # The slope, handed in the same way and for the same reason. Defaults to a
+  # flat pair, so a caller that says nothing about height gets exactly the
+  # phase this method produced before the slope existed.
+  bl = o[:blauert] || { hi_note: 120, lo_note: 103, res: 0.293,
+                        hi_from: 0.0, hi_to: 0.0, lo_from: 0.0, lo_to: 0.0 }
   # --- the drawing's bounds, so we can fold it onto a smaller rig ---
   lo_d = o[:clouds].map { |c| [c[:span0][0], c[:span1][0]].min }.min
   hi_d = o[:clouds].map { |c| [c[:span0][1], c[:span1][1]].max }.max
@@ -280,25 +398,68 @@ define :play_cloud_phase do |o|
   events.group_by { |e| e[:chan] }.each do |ch, mine|
     in_thread do
       with_fx :sound_out, output: ch, amp: 0 do
-        # The same soft ceiling as M=0. tanh sees the SUM of the grains
-        # overlapping on a channel, so it catches exactly the unpredictable
-        # pileups of the Poisson process - the only place the clouds could
-        # exceed 1.0.
-        with_fx :tanh, krunch: 0.25 do
-          prev = 0.0
-          mine.each do |e|
-            sleep e[:t] - prev
-            prev = e[:t]
-            # lpf: this is the sampler's INTERNAL filter, not a separate FX.
-            # Every grain carries its own cutoff, so there's no need for
-            # either an :lpf synth per channel or a `control` message per
-            # grain - exactly the per-event work that was leaving the
-            # threads behind.
-            sample e[:wav], start: e[:start], finish: e[:finish],
-                   amp: e[:amp], rate: e[:rate], lpf: e[:lpf],
-                   attack: 0.01, release: 0.06
+        with_fx :compressor, threshold: enh_thr, slope_below: enh_below,
+                            slope_above: enh_above, clamp_time: 0.01,
+                            relax_time: 0.25 do
+          # The same soft ceiling as M=0. tanh sees the SUM of the grains
+          # overlapping on a channel, so it catches exactly the unpredictable
+          # pileups of the Poisson process - the only place the clouds could
+          # exceed 1.0.
+          with_fx :tanh, krunch: 0.25 do
+            # THE SLOPE, voiced (see "THE BREATH'S HEIGHT"). The descent is
+            # the "above" band draining out of the phase while the
+            # "behind/below" band returns to flat - M=0's chord, ramped
+            # instead of held.
+            #
+            # Both slides are started once, here, and run the length of the
+            # phase, so the slope costs two nodes and two messages per
+            # CHANNEL no matter how many grains land on it. That is the only
+            # reason this is affordable: the chain is already persistent for
+            # the whole phase, and per-grain EQ would be exactly the
+            # per-event work the lpf note below explains we avoid.
+            #
+            # Inside the tanh deliberately, as at M=0: the boost is part of
+            # what the ceiling has to catch, not something added after it.
+            # It costs less headroom than it looks like it should - the
+            # +9 dB sits at 8372 Hz, right at the lpf knee where this
+            # material is already rolling off, while the -6 dB comes out of
+            # 3136 Hz, where the measurement found 22.7% of the RMS.
+            # The grain schedule itself, independent of whether the slope
+            # is voiced - so the band pair can be SKIPPED entirely at 0 dB
+            # rather than instantiated flat. Two transparent FX per channel
+            # still cost per-sample work, which made xen_blauert useless as
+            # an off switch exactly when we needed it to A/B DSP load.
+            play_grains = lambda do
+              prev = 0.0
+              mine.each do |e|
+                sleep e[:t] - prev
+                prev = e[:t]
+                # lpf: this is the sampler's INTERNAL filter, not a separate
+                # FX. Every grain carries its own cutoff, so there's no need
+                # for either an :lpf synth per channel or a `control`
+                # message per grain - exactly the per-event work that was
+                # leaving the threads behind.
+                sample e[:wav], start: e[:start], finish: e[:finish],
+                       amp: e[:amp], rate: e[:rate], lpf: e[:lpf],
+                       attack: 0.01, release: 0.06
+              end
+              sleep o[:dur] - prev
+            end
+
+            if bl[:hi_from].abs < 0.01 && bl[:hi_to].abs < 0.01
+              play_grains.call
+            else
+              with_fx :band_eq, freq: bl[:hi_note], res: bl[:res],
+                                db: bl[:hi_from], db_slide: o[:dur] do |eq_hi|
+                with_fx :band_eq, freq: bl[:lo_note], res: bl[:res],
+                                  db: bl[:lo_from], db_slide: o[:dur] do |eq_lo|
+                  control eq_hi, db: bl[:hi_to]
+                  control eq_lo, db: bl[:lo_to]
+                  play_grains.call
+                end
+              end
+            end
           end
-          sleep o[:dur] - prev
         end
       end
     end
@@ -310,28 +471,73 @@ end
 # 1d. THE ATMOSPHERE LOADER THREAD
 # Prepares the next cycle's set and frees the set from TWO cycles ago - not
 # the previous one, which might still be sounding on its tail.
-live_loop :atmos_loader do
+live_loop "atmos_loader_#{run_tag}".to_sym do
   # Administrative loop: triggers no sound, so it needs no precision.
-  # Without this it would get killed by a TimingError right during loading.
-  use_sched_ahead_time 60
+  # Was 60, to stop a TimingError killing the loop during the sample load.
+  # But sched_ahead is also how long every `set` in this thread parks a raw
+  # Thread.new in Sonic Pi's GUI-message path (runtime.rb:1919): at 60 each
+  # cycle left threads sitting for a full minute, they are NOT job subthreads
+  # so Stop does not touch them, and they pile up until the message queue
+  # backs up and the next Run cannot start its loops. 2.0 matches the piece.
+  use_sched_ahead_time 2.0
 
   sleep cycle_dur - 4.0        # let the current cycle keep sounding
-  upcoming = atmos_set.call
-  upcoming.each_value { |f| load_sample f }
 
-  to_free = get(:atmos_n1)
+  # STAGGERED, not batched. This loop used to fire all six load_sample calls
+  # back to back and then sample_free the whole outgoing set in one go. Six
+  # 16 s stereo files is ~37 MB of /b_allocRead landing on scsynth inside
+  # 200 ms, on top of a cycle that is already sounding, and the device did
+  # not survive it: measured twice, an atmos load burst at 14:46:51 and
+  # 14:53:05 was followed by audioDeviceStopped at 14:47:09 and 14:53:22.
+  # The trivial device test, which loads nothing, ran for five minutes on
+  # the same machine without a single stop.
+  #
+  # So the work is spread across three of the four spare seconds instead of
+  # being dumped in one instant. `spread` is computed from the actual number
+  # of operations so the loop still consumes EXACTLY cycle_dur in total -
+  # this loop has to stay in phase with the breath, or the set would switch
+  # underneath a cycle that is still playing it.
+  #
+  # NB `stagger`, not `spread`: spread() is a Sonic Pi built-in (the
+  # Euclidean rhythm generator) and a local of that name shadows it.
+  upcoming = atmos_set.call
+  to_free  = get(:atmos_n1)
+  n_ops    = upcoming.size + (to_free ? to_free.size : 0)
+  stagger  = 3.0 / n_ops
+
+  upcoming.each_value { |f| load_sample f; sleep stagger }
+
   set :atmos_n1, get(:atmos_n0)
   set :atmos_n0, upcoming
-  sample_free(*to_free.values) if to_free
+  # Frees are staggered for the same reason, and stay AFTER the loads: the
+  # set being freed is two cycles old, so nothing is still sounding it.
+  to_free.to_h.values.each { |f| sample_free f; sleep stagger } if to_free
 
-  sleep 4.0
+  sleep 1.0                    # 3.0 spent staggering + 1.0 = the 4.0 above
 end
 
 # 2. THE INSTALLATION'S MAIN LOOP
 # seed: applied ONCE, when the loop's thread starts - so the random flow
 # evolves from one breath to the next, but the whole run repeats identically
 # on a new Run. Changing the seed requires Stop + Run.
-live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
+live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
+
+  # SCHEDULING LOOKAHEAD - left at Sonic Pi's default, deliberately.
+  #
+  # M=0 is the one place everything happens at once: the atmosphere accent
+  # (2 files x 4 quad_ceil channels = 8 threads), the ceiling scalpel (4) and
+  # the floor funnel (4) - SIXTEEN threads inside 35 ms, each building an FX
+  # chain and triggering a sample. Against the 0.5 s default that measured as
+  # LATE spikes of 1041.9 / 1192.2 / 1116.8 ms across three separate runs,
+  # always with the event count jumping by exactly 16.
+  #
+  # Raising this to 3.0 removed those spikes (1116 ms -> 4 ms) and STILL made
+  # the piece die sooner - 1 cycle instead of 2-3, twice in a row. A 3 s
+  # lookahead means ~6x more timestamped bundles queued in scsynth for a piece
+  # firing ~64 grain events a second, and that cost more than the spikes did.
+  # The fix for M=0 turned out to be xen_density, not lookahead. Kept as a
+  # knob because the measurement is worth being able to repeat.
+  use_sched_ahead_time get(:xen_sched_ahead, 0.5)
 
   # ==========================================
   # CONFIGURATION (read from the workspace at every breath)
@@ -348,9 +554,151 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
   # sound_out, so it's clearly audible that they're not part of the piece.
   # Kept off in the hall.
   bleep       = get(:xen_bleep, false)
-  atmos_on    = get(:xen_atmos, true)
-  atmos_amp   = get(:xen_atmos_amp, 0.25)      # the bed, under the granular
-  atmos_m0amp = get(:xen_atmos_m0_amp, 0.5)    # at M=0, OVER the granular
+  # Layer solo, orthogonal to focus: - focus picks WHICH phase of the breath
+  # plays, layers picks WHICH of the two materials you hear in it.
+  #   :both (default) :atmos (beds only) :grains (granular only)
+  # Muting a layer never changes the length of the breath: the phases below
+  # hold their time either way, otherwise the 16 s atmos files would be
+  # retriggered every couple of seconds.
+  layers      = get(:xen_layers, :both)
+  # ENHANCER - a dbx 118 in software.
+  #
+  # The 118 is a single-band compressor/expander: one knob running from
+  # compression, through unity at centre, into expansion. Expansion is the
+  # side it is normally used on - it pushes quiet material further down so
+  # transients regain their impact, i.e. it RESTORES dynamic range rather
+  # than taming it. Sonic Pi's :compressor is SuperCollider's Compander, so
+  # slope_below > 1 is exactly that downward expansion.
+  #   xen_enhance: -1.0 compress .. 0.0 unity (bypass) .. +1.0 expand
+  # At 0.0 both slopes are 1.0, which is a mathematical passthrough.
+  #
+  # Expansion only ever pulls quiet material DOWN (slope_above stays 1.0), so
+  # it cannot push these unlimited outputs into clipping. Compression, on the
+  # negative side of the knob, holds peaks instead - also safe. Nothing here
+  # adds gain.
+  # Defaults chosen against the measured levels of this material:
+  #   grains       0.155 .. 0.345 per event, channel peaks ~0.65 at amp 1.0
+  #   atmos beds   0.5 sustained
+  #   M=0 bursts   ~0.9 ceiling, ~0.86 floor
+  # A threshold of 0.2 therefore sits INSIDE the grain range and BELOW
+  # everything else: the beds keep their body and it is the sparse grains and
+  # the tails that get opened up - which is the job the 118 exists to do.
+  # +0.4 is slope_below 1.2, a 1.2:1 downward expansion: clearly audible on
+  # the clouds, still gentle.
+  #
+  # NOT patched anywhere at M=0 - the pivot runs at unity, as rehearsed. The
+  # two bursts ramp the tanh's amp to zero over m0_fade, deliberately placed
+  # on the tanh because a saturator flattens any ramp upstream of it, and an
+  # expander sits DOWNSTREAM: as the ramp carried the tail under the threshold
+  # it steepened a cross-fade that was tuned by ear. The vertical layer is out
+  # for the same reason - M=0 is one gesture and it stays unprocessed.
+  # The enhancer is on the beds and the clouds.
+  enhance     = get(:xen_enhance, 0.4)
+  enh_thr     = get(:xen_enhance_threshold, 0.2)
+  enh_below   = enhance > 0 ? 1.0 + enhance * 0.5 : 1.0
+  enh_above   = enhance < 0 ? 1.0 + enhance * 0.5 : 1.0
+  atmos_on    = [:both, :atmos].include?(layers)
+  grains_on   = [:both, :grains].include?(layers)
+  # The bed now sits ABOVE the granular material, not under it. Both are read
+  # every breath, so they can be trimmed by ear while the piece runs.
+  #
+  # HEADROOM: the beds and the granular channels each have their own tanh
+  # soft ceiling, but they reach the same hardware output through SEPARATE
+  # sound_out chains, so they sum AFTER both tanhs - and these outputs bypass
+  # the master limiter. Nothing catches the sum. Measured granular peaks with
+  # master_amp 0.8 were inhale ~0.52, ceiling ~0.72, floor ~0.69, and the desk
+  # runs master_amp 1.0, so raising the bed eats directly into what is left.
+  #
+  # This knob is now honest on any rig: bed_scale below re-references the
+  # beds to the 12-output hall, so a change made by ear in the studio is the
+  # same change in the hall. Before that it wasn't - on 4 outputs the bed
+  # arrived 4.8 dB under where the same number put it in the hall.
+  atmos_amp   = get(:xen_atmos_amp, 0.5)       # the bed, OVER the granular
+  atmos_m0amp = get(:xen_atmos_m0_amp, 0.75)   # the M=0 accent, over the bed
+
+  # M=0's two halves, trimmed separately over m0_amp. They are NOT the same
+  # gesture and they do not compete with the same thing.
+  #
+  # The atmosphere's M=0 accent plays on quad_ceil - the SAME speakers as the
+  # granular scalpel (1, 2, 11, 12) and never the funnel's (5, 6, 7, 8) - and
+  # in the same band: the scalpel is HPF'd to 2960-4186 Hz and then boosted
+  # +9 dB at 8372 Hz, which is exactly where the accent's Blauert band sits.
+  # The funnel is LPF'd at 466 Hz. So it is the SCALPEL that buries the
+  # accent, with nearly three octaves of clear air between the accent and the
+  # funnel, on different speakers.
+  #
+  # Which is why the default trims the scalpel and leaves the funnel alone.
+  # Pulling the funnel down would cost exactly the weight at the feet that
+  # makes M=0 land, and would not uncover one dB of the atmosphere.
+  m0_ceil_trim  = get(:xen_m0_ceil_amp, 0.85)   # -15%, about -1.4 dB
+  m0_floor_trim = get(:xen_m0_floor_amp, 1.0)   # the funnel, untouched
+
+  # THE SLOPE. The score's alpha/beta - see "THE BREATH'S HEIGHT" for why it
+  # is 12 and not the 25/30 written on the drawing. Read every breath like
+  # the amplitudes, so it can be found by ear: shallower leaves more of the
+  # "above" cue standing when the breath reaches M=0, steeper drains it
+  # sooner. xen_blauert is how strongly it is voiced at all - 0.0 puts the
+  # band pair at 0 dB, which is flat, and the phases sound exactly as they
+  # did before any of this existed.
+  # THE ATMOSPHERE'S SPECTRUM. The beds are field recordings - breath and
+  # doppler - so on their own they are broadband noise, which is the most
+  # granular thing in the piece: no pitch, all texture. To make them read as
+  # SPECTRAL instead, the four beds stop being four recordings and become
+  # four PARTIALS of one spectrum, each rung by a narrow resonance.
+  #
+  # Sonic Pi has no phase vocoder - there is no PV_/FFT FX in the whole set,
+  # so a real spectral freeze is not on the table. What is on the table is
+  # resonance: excite a narrow band and noise turns into pitch. A peaking EQ
+  # is the right tool rather than a band pass, because it ADDS the partial to
+  # the bed instead of replacing the bed with what is left after filtering -
+  # the material keeps its identity and gains a spectrum. It also keeps the
+  # gain explicit in dB, which :nrbpf would not: that one ends in a
+  # SuperCollider Normalizer targeting 1.0, which would drive these beds to
+  # full scale and walk straight through the headroom budget above.
+  #
+  # f0 is MEASURED, not chosen. Long-term average spectrum over three files
+  # from each of the four families (24-bit, 48 kHz, mono-summed):
+  #     62-125 Hz  11.9%    125-250 Hz  56.5%    250-500 Hz  25.0%
+  #     500-1k Hz   5.8%    1k-1.5k Hz   0.7%
+  # with the per-family peaks at 145.0 / 191.9 / 131.8 / 127.4 Hz. So 81.5%
+  # of the bed lives in 125-500 Hz, and MIDI 48 (C3, 130.8 Hz) sits on the
+  # lowest of those peaks. Partials 1..4 off it land at 131 / 262 / 392 /
+  # 523 Hz - across the band where the material actually has body, which is
+  # the difference between a resonance that rings and one that boosts
+  # nothing.
+  #
+  # Which bed gets which partial follows the breath: the inhale hexagon
+  # carries 1 and 2, the exhale hexagon 3 and 4, so the exhale side sits
+  # spectrally higher, the same direction its slope goes.
+  spec_db      = get(:xen_atmos_spectral, 10.0)  # depth of the resonance; 0 = off
+  spec_f0      = get(:xen_atmos_f0, 48)          # MIDI - C3, on the measured peak
+  spec_stretch = get(:xen_atmos_stretch, 1.0)    # 1.0 = harmonic, >1 = stretched
+  # res on :band_eq is NOT what the M=0 comment claims. fx_band_eq is
+  # MidEQ(in, freq, rq, db) with rq = 1 - res, and rq is 1/Q, so HIGHER res
+  # is a NARROWER band: 0.94 -> rq 0.06 -> Q ~17, about 0.09 octaves. Narrow
+  # is what we want here - a wide bump is a tone control, a narrow one sings.
+  spec_res     = get(:xen_atmos_res, 0.94)
+
+  breath_slope = get(:xen_breath_slope, 12.0)
+  # 0.75, not 1.0: the +9 dB band lands on the inhale's final lpf knee
+  # (8372 Hz) but sits above the exhale's (5274 Hz), so at full amount
+  # only the -6 dB cut reaches the exhale and costs it 3.5 dB of RMS.
+  # 1.0 restores tilt 1.0 == M=0's chord exactly, if the exhale can pay.
+  blauert_amt  = get(:xen_blauert, 0.75)
+  slope_drop   = breath_run * Math.tan(breath_slope * Math::PI / 180.0)
+  slope_end_z  = node_z - slope_drop
+  tilt_top     = breath_tilt.call(node_z)      # 1.0 - the theoretical height
+  tilt_bottom  = breath_tilt.call(slope_end_z) # ~0.0 at 12 deg - the speakers
+  # The guardrail. -25 deg lands at -0.76 m and -30 deg at -1.89 m, both
+  # under the floor of a hall whose speakers are all at 1.80 m; if an angle
+  # like that ever gets typed in again, it should not fail silently into a
+  # clamp. Only on change, like the rig/focus report.
+  if slope_end_z < speaker_z - 0.001 && get(:xen_slope_warned) != breath_slope
+    set :xen_slope_warned, breath_slope
+    puts "XENAKIS: slope #{breath_slope} deg drops the breath to " \
+         "#{slope_end_z.round(2)} m, under the #{speaker_z} m speaker plane - " \
+         "clamped. That is a page angle from the drawing, not a hall angle."
+  end
 
   # REAL GEOMETRY (Hala MX floor plan + the Aug 6 sketch):
   # 12 physical monitors, ALL at the same height, Z = 1.8 m, arranged in two
@@ -417,14 +765,92 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
     # source.
     # attack/release = atmos_margin -> fades in before and out after the
     # granular material.
-    { atm[:inh_a] => [1, 3, 5], atm[:inh_b] => [2, 4, 6],
-      atm[:exh_a] => [7, 9, 11], atm[:exh_b] => [8, 10, 12] }.each do |f, channels|
+    atmos_beds = { atm[:inh_a] => [1, 3, 5], atm[:inh_b] => [2, 4, 6],
+                   atm[:exh_a] => [7, 9, 11], atm[:exh_b] => [8, 10, 12] }
+
+    # On a smaller rig the twelve vertices wrap round the outputs available -
+    # the same modular fold xen_spread uses for the M=0 quads. Unlike the
+    # clouds, which compress their whole drawing, the beds are four fixed
+    # sources: what has to survive is that a and b stay on DIFFERENT speakers,
+    # and the wrap gives exactly that. On four outputs both a-beds land on
+    # 1,3 and both b-beds on 2,4, so the two decorrelated sources still
+    # envelop the space instead of collapsing onto one speaker.
+    #
+    # uniq is not cosmetic: 1,3,5 folds to 1,3,1 on four outputs, and without
+    # it the same file would play twice on speaker 1 - correlated with itself,
+    # so +6 dB rather than +3.
+    if rig_outputs < 12
+      atmos_beds = atmos_beds.map { |f, chans|
+        [f, chans.map { |ch| ((ch - 1) % rig_outputs) + 1 }.uniq]
+      }.to_h
+    end
+
+    # Constant TOTAL power, not constant per-speaker level.
+    #
+    # This used to divide each bed by sqrt(beds sharing its speaker), which
+    # held every SPEAKER at the level the material was measured at. The
+    # clouds do the OPPOSITE: folding the drawing onto fewer outputs keeps
+    # every grain, so their total radiated power is rig-independent and only
+    # the per-channel density goes up (inhale spans 1..6, so at 4 outputs
+    # that is x1.5 per channel). The beds gave away exactly what the clouds
+    # kept: at 4 outputs the twelve bed slots fold to eight and each was cut
+    # 3 dB, so the bed radiated 4/12 of the hall's power into the room while
+    # the granular material radiated all of it. That is 4.8 dB of balance
+    # shift that exists ONLY on the reduced rig - which is why turning
+    # xen_atmos_amp up in the studio never bought what it said it did, and
+    # why the bed kept sounding under the grains here but not in the hall.
+    #
+    # So normalize on the number of bed SLOTS, referenced to the 12-output
+    # hall: at 12 this is exactly 1.0 and nothing about the hall changes; at
+    # 4 the eight surviving slots each come up by sqrt(12/8) = +1.8 dB and
+    # the bed keeps its weight against the clouds.
+    #
+    # The beds sharing a speaker are decorrelated (measured ~0.00), so they
+    # sum by power and not by amplitude, and the tanh below is the ceiling
+    # for that pileup exactly as it is for the clouds. These outputs bypass
+    # the master limiter, so on a rig much smaller than 4 (where the slots
+    # collapse further and this factor keeps climbing) the beds want a lower
+    # xen_atmos_amp - the compensation is deliberately not capped, because
+    # capping it would silently reintroduce the imbalance it exists to fix.
+    bed_slots = atmos_beds.values.flatten.size
+    bed_scale = Math.sqrt(12.0 / bed_slots)
+
+    # each_with_index, so the insertion order above IS the partial order:
+    # inh_a, inh_b, exh_a, exh_b -> partials 1, 2, 3, 4.
+    atmos_beds.each_with_index do |(f, channels), i|
+      # The partial this bed rings at. Stretch 1.0 is a plain harmonic
+      # series; above it the series widens the way a struck bar's does,
+      # which is the usual way to keep a spectrum from sounding like an
+      # organ chord.
+      bed_note = hz_to_midi(midi_to_hz(spec_f0) * ((i + 1) ** spec_stretch))
       channels.each do |ch|
         in_thread do
           with_fx :sound_out, output: ch, amp: 0 do
-            with_fx :tanh, krunch: 0.25 do
-              sample f, amp: atmos_amp * master_amp,
-                        attack: atmos_margin, release: atmos_margin
+            with_fx :compressor, threshold: enh_thr, slope_below: enh_below,
+                                slope_above: enh_above, clamp_time: 0.01,
+                                relax_time: 0.25 do
+              with_fx :tanh, krunch: 0.25 do
+                # Inside the tanh, like every other boost in the piece: the
+                # resonance is part of what the ceiling has to catch. A
+                # Q ~17 peak only lifts a sliver of the band, so the
+                # broadband cost is far smaller than the dB figure looks -
+                # but it is not zero, and it lands at 131 Hz where 56% of
+                # the bed's energy already is.
+                #
+                # At 0 dB the FX is SKIPPED, not merely flat. A band_eq at
+                # 0 dB is transparent but still a node doing per-sample
+                # work, which made xen_atmos_spectral useless as an off
+                # switch when we needed to A/B the DSP cost.
+                if spec_db.abs < 0.01
+                  sample f, amp: atmos_amp * master_amp * bed_scale,
+                            attack: atmos_margin, release: atmos_margin
+                else
+                  with_fx :band_eq, freq: bed_note, res: spec_res, db: spec_db do
+                    sample f, amp: atmos_amp * master_amp * bed_scale,
+                              attack: atmos_margin, release: atmos_margin
+                  end
+                end
+              end
             end
           end
         end
@@ -440,7 +866,8 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
           in_thread do
             with_fx :sound_out, output: ch, amp: 0 do
               with_fx :tanh, krunch: 0.25 do
-                with_fx :band_eq, freq: 120, res: 0.8, db: 9 do
+                with_fx :band_eq, freq: blauert_hi_note, res: blauert_res,
+                                  db: blauert_hi_db do
                   sample f, amp: atmos_m0amp * master_amp,
                             finish: 0.35, attack: 0.05, release: 3.0
                 end
@@ -455,15 +882,23 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
   sleep atmos_margin   # atmos only - the granular material enters after
 
   # ==========================================
-  # PHASE 1: INHALE (fluid descent along the -12° slope)
+  # PHASE 1: INHALE (fluid descent along the -12° slope, now actually voiced)
   # ==========================================
   if play_inhale
-    play_cloud_phase dur: inhale_dur, rig: rig_outputs,
-                     pitch_from: 1.4, pitch_to: 0.95, pitch_jit: 0.04,
-                     lpf_from: 120,   lpf_to: 75,     lpf_jit: 3,
-                     amp_lo: 0.155 * master_amp, amp_hi: 0.31 * master_amp,
-                     clouds: [cloud_positive.merge(pool: pool_inhale_high),
-                              cloud_negative.merge(pool: pool_inhale_mid)]
+    if grains_on
+      play_cloud_phase dur: inhale_dur, rig: rig_outputs,
+                       enh_thr: enh_thr, enh_below: enh_below, enh_above: enh_above,
+                       pitch_from: 1.4, pitch_to: 0.95, pitch_jit: 0.04,
+                       lpf_from: 120,   lpf_to: 75,     lpf_jit: 3,
+                       amp_lo: 0.155 * master_amp, amp_hi: 0.31 * master_amp,
+                       # down the slope: full height at S1, the speaker plane
+                       # by M=0.
+                       blauert: blauert_ramp.call(tilt_top, tilt_bottom, blauert_amt),
+                       clouds: [cloud_positive.merge(pool: pool_inhale_high),
+                                cloud_negative.merge(pool: pool_inhale_mid)]
+    else
+      sleep inhale_dur   # grains muted - hold the phase
+    end
     sleep inhale_pause
   end
 
@@ -472,7 +907,7 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
   # ==========================================
 
   # A. THE UPPER QUAD - SHARP PSYCHOACOUSTIC SCALPEL EFFECT
-  if play_ceil
+  if play_ceil && grains_on
     in_thread do
       # Surgically cutting the lows/mids: the HPF only lets very high, sharp
       # frequencies through. The cutoff is chosen once for the whole gesture,
@@ -482,7 +917,8 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
       quad_ceil.each_with_index do |quad_chan, i|
         in_thread do
           with_fx :sound_out, output: quad_chan, amp: 0 do
-            with_fx :tanh, krunch: 0.25, amp: m0_amp, amp_slide: m0_fade do |vol|
+            with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_ceil_trim,
+                            amp_slide: m0_fade do |vol|
               # amp: 6 is makeup gain, placed AFTER the filter - the HPF cuts
               # ~76% of the energy; without it the scalpel would be the
               # weakest layer in the piece.
@@ -493,10 +929,18 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
                 # band) and only 12.6% at 8 kHz (the "above" band), so it was
                 # pulling downward. We boost 8 kHz and cut 3 kHz to reverse
                 # the ratio.
-                # res = 1/Q: higher = wider band. Blauert's bands are wide,
-                # about an octave.
-                with_fx :band_eq, freq: 120, res: 0.8, db: 9 do
-                  with_fx :band_eq, freq: 103, res: 0.8, db: -6 do
+                # Blauert's bands are wide - about an octave - and these
+                # now actually are. They used to sit at res 0.8 under the
+                # belief that higher res meant wider; it means the reverse
+                # (rq = 1 - res, rq = 1/Q), so they were Q 5, ~0.29 octaves.
+                # See blauert_res for the derivation. This widens a gesture
+                # that was rehearsed narrow: the cue gets broader and less
+                # whistly, and the 3 kHz cut takes more of the "behind"
+                # band with it.
+                with_fx :band_eq, freq: blauert_hi_note, res: blauert_res,
+                                  db: blauert_hi_db do
+                  with_fx :band_eq, freq: blauert_lo_note, res: blauert_res,
+                                    db: blauert_lo_db do
                     with_fx :flanger, phase: 0.04, depth: 0.85, feedback: 0.7 do
                       sample variant[i], amp: master_amp
                       sleep m0_dur                 # burst at full level
@@ -519,13 +963,14 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
   sleep 0.035 if play_ceil && play_floor
 
   # B. THE PHYSICAL FUNNEL AT THE FEET (the low monitors at 1.8m)
-  if play_floor
+  if play_floor && grains_on
     in_thread do
       variant = m0_floor_variants.choose
       quad_floor.each_with_index do |floor_chan, i|
         in_thread do
         with_fx :sound_out, output: floor_chan, amp: 0 do
-          with_fx :tanh, krunch: 0.25, amp: m0_amp, amp_slide: m0_fade do |vol|
+          with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_floor_trim,
+                          amp_slide: m0_fade do |vol|
             # The grain amplitudes are already baked into the render, as the
             # ATTACK stage of the distortion (dry peak ~3.1 - that's why the
             # renders are float32). The distortion's amp, which carries
@@ -548,28 +993,36 @@ live_loop :xenakis_installation, seed: get(:xen_seed, 0) do
   sleep m0_dur + m0_tail if play_ceil || play_floor # shockwave absorbed into Hala MX's natural reverb
 
   # ==========================================
-  # PHASE 3: EXHALE (fluid stochastic rise along the +12° slope)
+  # PHASE 3: EXHALE (fluid stochastic rise along the +12° slope, now voiced)
   # ==========================================
   if play_exhale
-    # The POSITIVE mass (dense) is the shatter, which flies up to the
-    # ceiling.
-    # The NEGATIVE mass (sparse) is the pressure, which stays low, near the
-    # ground.
-    play_cloud_phase dur: exhale_dur, rig: rig_outputs,
-                     pitch_from: 0.8, pitch_to: 1.34, pitch_jit: 0.06,
-                     # lpf_from matters MORE than the amplitude here:
-                     # the "shatter" material loses 10.5 dB through the
-                     # filter at 75 (622 Hz) - practically making the
-                     # entrance inaudible - versus 0 dB at the inhale's
-                     # entrance, which starts at 120 (8372 Hz). At 88 (1568
-                     # Hz) the loss drops to ~6 dB. Grain fusion is now
-                     # handled by the "long only" pools, not by darkening
-                     # the filter.
-                     lpf_from: 88,    lpf_to: 112,    lpf_jit: 4,
-                     amp_lo: 0.138 * master_amp, amp_hi: 0.345 * master_amp,
-                     entry_amp: 2.4,
-                     clouds: [cloud_exhale_positive.merge(pool: pool_exhale_shatter),
-                              cloud_exhale_negative.merge(pool: pool_exhale_pressure)]
+    if grains_on
+      # The POSITIVE mass (dense) is the shatter, which flies up to the
+      # ceiling.
+      # The NEGATIVE mass (sparse) is the pressure, which stays low, near the
+      # ground.
+      play_cloud_phase dur: exhale_dur, rig: rig_outputs,
+                       enh_thr: enh_thr, enh_below: enh_below, enh_above: enh_above,
+                       pitch_from: 0.8, pitch_to: 1.34, pitch_jit: 0.06,
+                       # lpf_from matters MORE than the amplitude here:
+                       # the "shatter" material loses 10.5 dB through the
+                       # filter at 75 (622 Hz) - practically making the
+                       # entrance inaudible - versus 0 dB at the inhale's
+                       # entrance, which starts at 120 (8372 Hz). At 88 (1568
+                       # Hz) the loss drops to ~6 dB. Grain fusion is now
+                       # handled by the "long only" pools, not by darkening
+                       # the filter.
+                       lpf_from: 88,    lpf_to: 112,    lpf_jit: 4,
+                       amp_lo: 0.138 * master_amp, amp_hi: 0.345 * master_amp,
+                       entry_amp: 2.4,
+                       # back up it: the exhale is the inhale's ramp reversed,
+                       # leaving M=0 on the plane and recovering S11's 4.00 m.
+                       blauert: blauert_ramp.call(tilt_bottom, tilt_top, blauert_amt),
+                       clouds: [cloud_exhale_positive.merge(pool: pool_exhale_shatter),
+                                cloud_exhale_negative.merge(pool: pool_exhale_pressure)]
+    else
+      sleep exhale_dur   # grains muted - hold the phase
+    end
   end
 
   synth :pretty_bell, note: :c6, release: 0.8, amp: 0.35 if bleep  # the exhale has ended
