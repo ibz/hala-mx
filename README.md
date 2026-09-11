@@ -380,6 +380,61 @@ under the threshold, it steepened a cross-fade that had been tuned by ear. The
 vertical layer is out for the same reason: M=0 is one gesture and it stays
 unprocessed.
 
+### The beds turn — `xen_atmos_rotate`
+
+Until this, the atmosphere was **the one thing in the piece with no motion at
+all**: `inh_a` sat on channels 1, 3 and 5 at equal level for the whole 16
+seconds and stayed there.
+
+Everything else that moves is locked to one clock. Position, pitch, `lpf` and
+the Blauert tilt are all monotonic ramps of exactly one traversal per phase —
+which is precisely what makes the breath read as a single gesture rather than
+four independent ones. Decoupling the *clouds* from that would fragment it.
+
+The beds are different. They are the **ground, not the gesture**, so turning
+them underneath costs the breath nothing and gives the Philips Pavilion effect
+directly: the architecture rotating while the texture deforms. In the pavilion
+the tape moved along "sound routes" across the array on a path independent of
+the tape's own evolution — the same decoupling.
+
+**The rotation is constant-power by construction**, which is what makes it
+usable at all:
+
+```ruby
+th = 2 * Math::PI * (vt / rot_period - ch_i.to_f / n_ch)
+g  = [1.0 + rot_depth * Math.cos(th), 0.0].max
+control node, amp: bed_amp * Math.sqrt(g)
+```
+
+With the channel phases equally spaced by `2π/n`, `Σ cos(θ − 2πi/n) = 0` for
+`n ≥ 2`, so `Σ amp²` over the bed's channels is `base²·n` at **every instant**.
+Measured ripple: **0.000 dB** at any depth, on both n=3 (hall) and n=2 (folded
+studio rig). The level never pumps; only its distribution turns. Depth 0.6
+gives a 6 dB per-channel swing.
+
+At `n = 1` there is nothing to rotate against and the sum degenerates to a
+single cosine — 9.5 dB of pumping at depth 0.8, infinite at 1.0 — so the
+rotation is guarded off below two channels.
+
+**`vt`, not a local counter.** The phase has to stay continuous *across*
+cycles; a per-cycle counter would reset every 16 s and collapse the second
+clock back onto the breath. And the period must not divide into `cycle_dur` for
+the same reason — 41 s against 16 s repeats only every 656 s.
+
+> **A real bonus.** The same bed plays on three coherent speakers, so it builds
+> an interference pattern with fixed nulls. Rotating the distribution walks
+> those nulls slowly through the room instead of leaving them parked in one
+> place — and unlike a fixed decorrelation delay, it comb-filters nothing.
+
+**This is a hall feature.** On four outputs the beds fold to two channels each,
+so the rotation is only a left–right sway. The studio cannot show what it
+actually does — the same trap as `bed_scale` and the M=0 quads.
+
+Cost is 12 bed nodes at 2 control messages a second — 24/s against the ~64
+grain events/s the piece already sustains, with `amp_slide` interpolating
+between them. At `xen_atmos_rotate 0` the bed is triggered exactly as before,
+no slide is set and no control loop runs.
+
 ### Grain density — `xen_density`
 
 A multiplier on every cloud's `lambda`. It exists because it was the only
@@ -529,6 +584,57 @@ applies only to the inhale and exhale clouds.
 The trade is granularity: at low density a discrete cloud can start to read as
 separate points rather than as movement. That can only be judged in the room,
 which is why this is a live parameter — flip it mid-run while walking the hall.
+
+### The trajectory — `xen_traj_mode`
+
+**The span was always deterministic.** `lo` and `hi` in `play_cloud_phase` are a
+plain linear interpolation from `span0` to `span1` across the phase — the window
+travels down the inhale slope on rails. What `:scatter` randomises is only
+*where inside that window* each grain lands.
+
+`:sweep` replaces that scatter with a parametric curve — the *Metastaseis* /
+Philips Pavilion reading of the same drawing: a ruled surface traced by
+glissandi rather than a cloud filling a volume.
+
+```ruby
+centre = mid + half * Math.sin(2 * Math::PI * rate * f + ph)
+pos    = centre + rrand(-traj_width, traj_width) * half
+pos    = [[pos, lo].max, hi].min
+```
+
+Both idioms are Xenakis — the Poisson clouds are the *Pithoprakta* /
+*Achorripsis* stochastic lineage, this is the glissando lineage — so it is a
+**choice of idiom, not a correction**.
+
+**`xen_traj_width` is the dial that matters.** At 0.0 the phase collapses to a
+single travelling point: one grain position at any instant, which under
+`xen_pan_mode :discrete` means one speaker at a time. That is a line, not a
+cloud. *Metastaseis* is 46 separate string glissandi — a **bundle** of nearby
+lines — so the default keeps a narrow scatter around the swept centre and reads
+as a thick line. At 1.0 it melts back into `:scatter`, only phase-locked.
+
+Each cloud gets its own rate and a quadrature phase offset, so the two families
+of lines **cross** rather than moving in lockstep — the crossings are the
+surface. With two clouds that is 1× and 2× `xen_traj_cycles`.
+
+The two switches are orthogonal, and the four combinations sound like four
+different pieces:
+
+| | `:continuous` | `:discrete` |
+|---|---|---|
+| **`:scatter`** | the original — a cloud with a phantom image | a cloud, each grain on one speaker |
+| **`:sweep`** | a glissando gliding between speakers | a glissando stepping speaker to speaker |
+
+> `sin()` gives smooth turnarounds. A ruled surface is strictly made of
+> **straight** lines, so a triangle wave is the more literal reading — at the
+> cost of a sharper reversal at each extreme. It is a one-line swap in
+> `play_cloud_phase`.
+
+Bounds are clamped to the current span before the rig fold. Without that the
+scatter can push `pos` past `lo`/`hi`, and the fold would then produce a channel
+index off the end of the rig — `:scatter` never needed it, because
+`rrand(lo, hi)` is bounded by construction. Verified across both rigs at widths
+0.0 to 1.0.
 
 ### Blauert band width
 
@@ -700,6 +806,8 @@ set :xen_density, 1.0      # grain density multiplier (§5)
 set :xen_sched_ahead, 3.0  # lookahead for the breath loop — spikes vs. Stop safety (§4)
 set :xen_atmos_amp, 0.5    # the bed — sits OVER the granular material (rig-compensated)
 set :xen_atmos_m0_amp, 0.75
+set :xen_atmos_rotate, 0.0 # beds turn: depth 0.0-1.0, constant power (§5)
+set :xen_atmos_rotate_period, 41.0 # seconds; not a divisor of the 16 s cycle
 set :xen_m0_ceil_amp, 0.85 # M=0's granular scalpel, trimmed so the atmos accent shows
 set :xen_m0_floor_amp, 1.0 # M=0's funnel — left alone on purpose
 set :xen_atmos_spectral, 10.0 # depth in dB of the beds' resonant partials, 0 = off
@@ -709,6 +817,9 @@ set :xen_atmos_res, 0.94   # HIGHER = NARROWER (rq = 1 − res)
 set :xen_breath_slope, 12.0 # the score's α/β, in degrees — see "The slope"
 set :xen_blauert, 0.75     # how strongly the slope is voiced, 0.0 = off
 set :xen_pan_mode, :continuous # :continuous (phantom) | :discrete (one speaker per grain)
+set :xen_traj_mode, :scatter  # :scatter (cloud) | :sweep (ruled-surface glissando)
+set :xen_traj_cycles, 3.0     # sweeps per phase, first cloud; second runs at 2x
+set :xen_traj_width, 0.12     # line thickness, fraction of the span half-width
 set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
 set :xen_enhance_threshold, 0.2   # beds + clouds only; all of M=0 stays at unity
 set :xen_master_amp, 1.0

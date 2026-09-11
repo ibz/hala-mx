@@ -337,13 +337,18 @@ define :play_cloud_phase do |o|
   # :continuous, so a caller that says nothing gets the phantom-image panning
   # this method has always produced.
   discrete = o[:pan_mode] == :discrete
+  # WHERE a grain sits inside the moving span - :scatter or :sweep. Same
+  # defaults-to-the-old-behaviour rule.
+  sweep      = o[:traj_mode] == :sweep
+  traj_cyc   = o[:traj_cycles] || 3.0
+  traj_width = o[:traj_width]  || 0.12
   # --- the drawing's bounds, so we can fold it onto a smaller rig ---
   lo_d = o[:clouds].map { |c| [c[:span0][0], c[:span1][0]].min }.min
   hi_d = o[:clouds].map { |c| [c[:span0][1], c[:span1][1]].max }.max
 
   # --- 1. the whole timeline is built in the parent thread ---
   events = []
-  o[:clouds].each do |c|
+  o[:clouds].each_with_index do |c, ci|
     # shape = the Erlang order: the sum of `shape` exponential intervals, at
     # the same mean density. shape 1 = pure Poisson - natural, but CLUMPY:
     # exponential gaps have no upper bound, so long silences appear on a
@@ -362,7 +367,50 @@ define :play_cloud_phase do |o|
 
       lo = c[:span0][0] + (c[:span1][0] - c[:span0][0]) * f
       hi = c[:span0][1] + (c[:span1][1] - c[:span0][1]) * f
-      pos = rrand(lo, hi)
+      # THE SPAN ITSELF WAS ALWAYS DETERMINISTIC. lo and hi above are a plain
+      # linear interpolation from span0 to span1 across the phase - the window
+      # travels down the inhale slope on rails. What :scatter randomises is
+      # only WHERE INSIDE that window each grain lands.
+      #
+      # :sweep replaces that scatter with a parametric curve, which is the
+      # Metastaseis / Philips Pavilion reading of the same drawing: a ruled
+      # surface traced by glissandi rather than a cloud filling a volume.
+      # Both are Xenakis - the clouds are the Pithoprakta/Achorripsis
+      # stochastic lineage, this is the glissando lineage - so it is a choice
+      # of idiom, not a correction.
+      #
+      # traj_width is the dial that matters. At 0.0 the phase collapses to a
+      # single travelling POINT: one grain position at any instant, which with
+      # pan_mode :discrete means one speaker at a time. That is a line, not a
+      # cloud. Metastaseis is 46 separate string glissandi, not one - a BUNDLE
+      # of nearby lines - so the default keeps a narrow scatter around the
+      # swept centre and reads as a thick line. Widen it and it melts back
+      # toward :scatter.
+      #
+      # Each cloud gets its own rate and a quadrature phase offset, so the two
+      # families of lines cross instead of moving in lockstep - the crossings
+      # ARE the surface. With two clouds that is 1x and 2x traj_cycles.
+      #
+      # sin() gives smooth turnarounds. A ruled surface is strictly made of
+      # STRAIGHT lines, so a triangle wave is the more literal reading; it
+      # costs a sharper reversal at each extreme. Swap the sin() below if you
+      # want it.
+      if sweep
+        mid  = (lo + hi) / 2.0
+        half = (hi - lo) / 2.0
+        rate = traj_cyc * (ci + 1)
+        ph   = ci * Math::PI / 2
+        centre = mid + half * Math.sin(2 * Math::PI * rate * f + ph)
+        pos = centre + rrand(-traj_width, traj_width) * half
+        # Clamp: the centre already reaches lo and hi at the extremes, so the
+        # scatter would push past them. Unclamped, the rig fold below can then
+        # produce pos < 1 or > rig, and `ch = pos.floor` would address a
+        # channel that does not exist. :scatter never needed this because
+        # rrand(lo, hi) is bounded by construction.
+        pos = [[pos, lo].max, hi].min
+      else
+        pos = rrand(lo, hi)
+      end
       # on a smaller rig, compress the whole drawing onto the outputs available
       pos = 1.0 + (pos - lo_d) * (o[:rig] - 1) / (hi_d - lo_d) if o[:rig] < hi_d
 
@@ -715,6 +763,36 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # is what we want here - a wide bump is a tone control, a narrow one sings.
   spec_res     = get(:xen_atmos_res, 0.94)
 
+  # THE BEDS ROTATE. Until now the atmosphere was the one thing in the piece
+  # with no motion at all: inh_a sat on channels 1, 3, 5 at equal level for
+  # the whole 16 s and stayed there.
+  #
+  # Everything else that moves is locked to ONE clock - position, pitch, lpf
+  # and the Blauert tilt are all monotonic ramps of exactly one traversal per
+  # phase, which is what makes the breath read as a single gesture. Decoupling
+  # the CLOUDS from that would fragment it. The beds are different: they are
+  # the ground, not the gesture, so turning them underneath costs the breath
+  # nothing and gives the Philips Pavilion effect directly - the architecture
+  # rotating while the texture deforms. (In the pavilion the tape moved along
+  # "sound routes" across the array on a path independent of the tape's own
+  # evolution; this is the same decoupling.)
+  #
+  # The period must NOT divide into cycle_dur, or the rotation locks to the
+  # breath and stops being a second clock. 41 s against 16 s repeats only
+  # every 656 s.
+  #
+  # Bonus, and a real one: the same bed plays on three coherent speakers, so
+  # it builds an interference pattern with fixed nulls. Rotating the
+  # distribution walks those nulls slowly through the room instead of leaving
+  # them parked on somebody's head - without comb-filtering anything, which a
+  # fixed delay would.
+  rot_depth  = [[get(:xen_atmos_rotate, 0.0), 0.0].max, 1.0].min
+  rot_period = get(:xen_atmos_rotate_period, 41.0)
+  # Control interval. 12 bed nodes x 2/s = 24 messages/s, against the ~64
+  # grain events/s the piece already sustains - and amp_slide interpolates
+  # between them, so at a 41 s period this is far finer than it needs to be.
+  rot_step   = 0.5
+
   breath_slope = get(:xen_breath_slope, 12.0)
   # 0.75, not 1.0: the +9 dB band lands on the inhale's final lpf knee
   # (8372 Hz) but sits above the exhale's (5274 Hz), so at full amount
@@ -757,6 +835,25 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # Kept as a live switch precisely because that trade can only be judged in
   # the room. Flip it mid-run while walking the hall.
   pan_mode    = get(:xen_pan_mode, :continuous)
+
+  # THE TRAJECTORY - :scatter (the original) or :sweep.
+  #
+  # Orthogonal to xen_pan_mode: pan_mode decides how a grain reaches the
+  # speakers, traj_mode decides where in the drawing it is in the first place.
+  # All four combinations are legal and they sound like four different pieces.
+  #   scatter + continuous  the original: a cloud with a phantom image
+  #   scatter + discrete    a cloud, each grain on one speaker
+  #   sweep   + continuous  a glissando gliding between speakers
+  #   sweep   + discrete    a glissando stepping speaker to speaker
+  traj_mode   = get(:xen_traj_mode, :scatter)
+  # Sweeps across one phase, for the first cloud; the second runs at twice
+  # this. Phase-relative, not seconds, so it keeps its shape if the breath
+  # timing ever changes.
+  traj_cycles = get(:xen_traj_cycles, 3.0)
+  # Thickness of the swept line, as a fraction of the span's half-width.
+  # 0.0 = a single travelling point, 1.0 = as wide as the span (which is
+  # :scatter again, only phase-locked).
+  traj_width  = get(:xen_traj_width, 0.12)
 
   # REAL GEOMETRY (Hala MX floor plan + the Aug 6 sketch):
   # 12 physical monitors, ALL at the same height, Z = 1.8 m, arranged in two
@@ -881,8 +978,34 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       # which is the usual way to keep a spectrum from sounding like an
       # organ chord.
       bed_note = hz_to_midi(midi_to_hz(spec_f0) * ((i + 1) ** spec_stretch))
-      channels.each do |ch|
+      n_ch = channels.size
+      channels.each_with_index do |ch, ch_i|
         in_thread do
+          # The travelling amplitude wave, as a lambda so it can be called
+          # from inside whichever FX nesting the spectral branch builds -
+          # running it outside would tear the band_eq down underneath it.
+          #
+          # CONSTANT POWER, and this is the whole reason the shape is what it
+          # is. With the channels' phases equally spaced by 2*pi/n,
+          #     sum_i cos(theta - 2*pi*i/n) = 0   for n >= 2
+          # so with amp_i^2 = base^2 * (1 + d*cos(...)), the sum of amp^2 over
+          # the bed's channels is base^2 * n at EVERY instant. The level never
+          # pumps; only its distribution turns. That holds at n = 3 in the
+          # hall and n = 2 on the folded studio rig - but not at n = 1, where
+          # there is nothing to rotate against, hence the guard.
+          bed_amp = atmos_amp * master_amp * bed_scale
+          rotate = lambda do |node|
+            steps = (cycle_dur / rot_step).floor
+            steps.times do
+              # vt, not a local counter: the phase has to stay continuous
+              # ACROSS cycles, or the rotation resets every 16 s and the
+              # second clock collapses back onto the breath.
+              th = 2 * Math::PI * (vt / rot_period - ch_i.to_f / n_ch)
+              g  = [1.0 + rot_depth * Math.cos(th), 0.0].max
+              control node, amp: bed_amp * Math.sqrt(g)
+              sleep rot_step
+            end
+          end
           with_fx :sound_out, output: ch, amp: 0 do
             with_fx :compressor, threshold: enh_thr, slope_below: enh_below,
                                 slope_above: enh_above, clamp_time: 0.01,
@@ -899,13 +1022,21 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                 # 0 dB is transparent but still a node doing per-sample
                 # work, which made xen_atmos_spectral useless as an off
                 # switch when we needed to A/B the DSP cost.
+                # amp_slide is only set when the rotation is actually on -
+                # at depth 0 the bed is triggered exactly as it always was,
+                # the lambda returns without sleeping, and the thread ends
+                # immediately, so nothing about the old path changes.
+                rot_on = rot_depth > 0.001 && n_ch >= 2
+                slide  = rot_on ? rot_step : 0
                 if spec_db.abs < 0.01
-                  sample f, amp: atmos_amp * master_amp * bed_scale,
-                            attack: atmos_margin, release: atmos_margin
+                  bed = sample f, amp: bed_amp, amp_slide: slide,
+                                  attack: atmos_margin, release: atmos_margin
+                  rotate.call(bed) if rot_on
                 else
                   with_fx :band_eq, freq: bed_note, res: spec_res, db: spec_db do
-                    sample f, amp: atmos_amp * master_amp * bed_scale,
-                              attack: atmos_margin, release: atmos_margin
+                    bed = sample f, amp: bed_amp, amp_slide: slide,
+                                    attack: atmos_margin, release: atmos_margin
+                    rotate.call(bed) if rot_on
                   end
                 end
               end
@@ -947,6 +1078,8 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       play_cloud_phase dur: inhale_dur, rig: rig_outputs,
                        enh_thr: enh_thr, enh_below: enh_below, enh_above: enh_above,
                        pan_mode: pan_mode,
+                       traj_mode: traj_mode, traj_cycles: traj_cycles,
+                       traj_width: traj_width,
                        pitch_from: 1.4, pitch_to: 0.95, pitch_jit: 0.04,
                        lpf_from: 120,   lpf_to: 75,     lpf_jit: 3,
                        amp_lo: 0.155 * master_amp, amp_hi: 0.31 * master_amp,
@@ -1063,6 +1196,8 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       play_cloud_phase dur: exhale_dur, rig: rig_outputs,
                        enh_thr: enh_thr, enh_below: enh_below, enh_above: enh_above,
                        pan_mode: pan_mode,
+                       traj_mode: traj_mode, traj_cycles: traj_cycles,
+                       traj_width: traj_width,
                        pitch_from: 0.8, pitch_to: 1.34, pitch_jit: 0.06,
                        # lpf_from matters MORE than the amplitude here:
                        # the "shatter" material loses 10.5 dB through the

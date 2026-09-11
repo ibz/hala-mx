@@ -22,7 +22,26 @@ set :xen_sched_ahead, 3.0  # scheduling lookahead for the breath loop. M=0 fires
 set :xen_atmos_amp, 0.5    # the atmosphere bed - sits OVER the granular material
                            # rig-compensated: the same number is the same balance
                            # on 4 outputs in the studio and on 12 in the hall
-set :xen_atmos_m0_amp, 0.75 # the atmosphere accent at M=0 - over the bed
+set :xen_atmos_m0_amp, 0.75
+set :xen_atmos_rotate, 0.0 # off
+                           # the beds TURN. Depth 0.0-1.0 of a travelling
+                           # amplitude wave around the channels each bed
+                           # occupies (3 in the hall, 2 folded). Until this,
+                           # the atmosphere was the one thing in the piece
+                           # with no motion at all - inh_a sat on 1, 3, 5 at
+                           # equal level for the whole 16 s.
+                           # CONSTANT POWER by construction: the channel
+                           # phases are equally spaced, so the sum of amp^2
+                           # is identical at every instant (measured 0.000 dB
+                           # ripple at any depth). The level never pumps,
+                           # only its distribution turns. 0.6 gives a 6 dB
+                           # per-channel swing
+set :xen_atmos_rotate_period, 41.0 # seconds, and deliberately NOT a divisor
+                           # of the 16 s cycle - it has to be a second clock
+                           # or it just locks to the breath. 41 against 16
+                           # repeats every 656 s.
+                           # A hall feature: on 4 outputs the beds fold to 2
+                           # channels and the rotation is only an L-R sway # the atmosphere accent at M=0 - over the bed
 set :xen_m0_ceil_amp, 0.85 # M=0's granular scalpel, trimmed -15% so the atmosphere
                            # accent - same speakers, same 8 kHz band - can be heard
 set :xen_m0_floor_amp, 1.0 # M=0's funnel. Left alone on purpose: it is LPF'd at
@@ -81,6 +100,31 @@ set :xen_pan_mode, :continuous # :continuous | :discrete
                            # Energy per channel is IDENTICAL either way, so
                            # an A/B is about placement, not level. Discrete
                            # also halves the voice count (0.58x measured)
+set :xen_traj_mode, :scatter # :scatter | :sweep
+                           # WHERE a grain sits inside the moving span. The
+                           # span itself was always deterministic - it slides
+                           # from span0 to span1 across the phase on rails -
+                           # and :scatter randomises only the position within
+                           # it. :sweep replaces that with a parametric curve:
+                           # the Metastaseis / Philips Pavilion reading of the
+                           # same drawing, a ruled surface traced by glissandi
+                           # instead of a cloud filling a volume. Both are
+                           # Xenakis (the clouds are the Pithoprakta lineage),
+                           # so this is a choice of idiom, not a correction.
+                           # Orthogonal to xen_pan_mode - all four combinations
+                           # are legal and sound like four different pieces
+set :xen_traj_cycles, 3.0  # sweeps across one phase for the first cloud; the
+                           # second runs at twice this, so the two families of
+                           # lines cross instead of moving in lockstep - the
+                           # crossings ARE the surface. Phase-relative, so it
+                           # keeps its shape if the breath timing changes
+set :xen_traj_width, 0.12  # thickness of the swept line, as a fraction of the
+                           # span's half-width. 0.0 = a single travelling
+                           # POINT (one speaker at a time under :discrete -
+                           # a line, not a cloud). Metastaseis is 46 separate
+                           # glissandi, not one, so the default keeps a narrow
+                           # scatter around the swept centre and reads as a
+                           # thick line. 1.0 melts back into :scatter
 set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
                            # on beds + clouds; all of M=0 stays at unity
 set :xen_enhance_threshold, 0.2 # where the 118 decides a signal is "quiet"
