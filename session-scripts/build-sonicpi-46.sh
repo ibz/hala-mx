@@ -35,6 +35,12 @@
 #         undefined reference to `__cxa_call_terminate@CXXABI_1.3.5'
 #     Set CC/CXX yourself to override; otherwise the distro default is used,
 #     which is the one the distro's Qt and libstdc++ were built against.
+#   * PATCHING app/api/src/audio/audio_processor.cpp (patch_shm_crash, below).
+#     The GUI's scope/spectrum view unconditionally re-enables itself every
+#     time scsynth boots and then crashes the whole app, because it expects a
+#     shared-memory interface that only Sonic Pi's own bundled SuperCollider
+#     fork creates - never the system scsynth this build uses. See
+#     patch_shm_crash for the full chain.
 #
 #   ./build-sonicpi-46.sh deps    install missing apt packages (needs sudo)
 #   ./build-sonicpi-46.sh clone   fetch v4.6.0 source
@@ -125,6 +131,77 @@ patch_boost() {
   echo "  -> dropped the 'system' component from app/api/CMakeLists.txt (.orig kept)"
 }
 
+# Sonic Pi's GUI scope/spectrum view reads scsynth's audio through a
+# boost::interprocess shared-memory segment, and ScopeWindow::Booted()
+# (app/gui/visualizer/scope_window.cpp) unconditionally re-enables it every
+# time scsynth boots - AudioProcessor_Enable(true), independent of any
+# show-scopes/show-spectrum GUI setting. That segment is only ever CREATED by
+# Sonic Pi's own bundled/patched SuperCollider fork, never by the SYSTEM
+# scsynth this script deliberately uses (see the header) - so
+# server_shared_memory_client's constructor always throws
+# std::runtime_error("Cannot connect to shared memory") on every boot.
+#
+# That throw happens on AudioProcessor's own std::thread with no try/catch
+# anywhere in the call chain (app/api/src/audio/audio_processor.cpp), so it
+# escapes into std::terminate and takes the whole GUI down a few seconds after
+# every single launch - confirmed by running it under start-46.sh and reading
+# the crash back through this exact call chain.
+#
+# Wrapping the connect attempt in try/catch turns that into what the existing
+# failure path already handles: an invalid reader that the 1s retry loop in
+# AudioProcessor::Run() just tries again forever. The scope/spectrum view
+# never works against the system scsynth, but nothing crashes.
+patch_shm_crash() {
+  f="$SRC/app/api/src/audio/audio_processor.cpp"
+  [ -f "$f" ] || return 0
+  grep -q "catch (const std::exception& e)" "$f" && return 0   # already done
+
+  cp "$f" "$f.orig"
+  python3 - "$f" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+with open(path) as fh:
+    src = fh.read()
+
+old = """void AudioProcessor::ResetConnection()
+{
+    m_shmClient.reset(new server_shared_memory_client(m_scSynthPort));
+    m_shmReader = m_shmClient->get_scope_buffer_reader(0);
+
+    if (m_shmReader.valid())"""
+
+new = """void AudioProcessor::ResetConnection()
+{
+    // The system scsynth (unlike Sonic Pi's own bundled/patched build) never creates
+    // this shared memory segment, so this throws on every attempt when running against
+    // it. Uncaught, that escapes this background thread and calls std::terminate -
+    // crashing the whole GUI as soon as scsynth boots. Treat it the same as an invalid
+    // reader instead: the caller already retries on a 1s timer.
+    try
+    {
+        m_shmClient.reset(new server_shared_memory_client(m_scSynthPort));
+        m_shmReader = m_shmClient->get_scope_buffer_reader(0);
+    }
+    catch (const std::exception& e)
+    {
+        LOG(ERR, "Failed to connect to shared audio memory: " << e.what());
+        return;
+    }
+
+    if (m_shmReader.valid())"""
+
+if old not in src:
+    sys.exit("patch_shm_crash: expected ResetConnection() body not found - upstream source may have changed, patch needs updating")
+
+with open(path, "w") as fh:
+    fh.write(src.replace(old, new, 1))
+PYEOF
+
+  echo "  system scsynth never creates the GUI's scope shared-memory segment (only the bundled fork does)"
+  echo "  -> wrapped ResetConnection()'s connect attempt in try/catch so it retries instead of crashing the GUI (.orig kept)"
+}
+
 do_clean() {
   hdr "Removing build directory"
   rm -rf "$SRC/app/build" && echo "  gone - the next build reconfigures from scratch"
@@ -134,6 +211,7 @@ do_build() {
   hdr "Building (30-60 min; full log: $LOG)"
   [ -d "$SRC/app" ] || { echo "  no source - run '$0 clone' first"; return 1; }
   patch_boost
+  patch_shm_crash
 
   # A POISONED CMAKE CACHE is the reason "boost is installed but cmake cannot
   # find it" survives reinstalling boost. linux-config.sh only does
