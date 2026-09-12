@@ -7,7 +7,13 @@
 #   ./start-46.sh --simulation     studio:   4 outputs on the UMC404HD, bleep ON
 #
 #   --keep        launch with whatever Buffer 0 already had (no desk install)
-#   <number>      override the output count for this run (e.g. --production 8)
+#   <number>      override the output count for this run:
+#                   --simulation 2   work on a laptop's built-in stereo
+#                   --production 8   a partially patched hall rig
+#                 Without a number, --simulation DEGRADES to whatever the sink
+#                 actually has (with a warning) while --production ABORTS - a
+#                 concert must not start silently under-routed, a desk session
+#                 should just work.
 #
 # THE MODE IS REQUIRED, deliberately. The two venues differ in ways that are
 # silent when wrong - 12 vs 4 outputs changes how the spatial drawing folds,
@@ -49,7 +55,9 @@
 
 set -uo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
-SP="$HOME/src/sonic-pi/app/build/gui/sonic-pi"
+# Must agree with build-sonicpi-46.sh, which produces this binary. Both
+# default to ~/src/sonic-pi and both honour $SONIC_PI_SRC.
+SP="${SONIC_PI_SRC:-$HOME/src/sonic-pi}/app/build/gui/sonic-pi"
 BUFFER="$HERE/../sonic-pi-buffer.rb"
 WS="$HOME/.sonic-pi/store/default/workspace_zero.spi"
 BAKDIR="$HOME/.sonic-pi/workspace-backups"
@@ -89,6 +97,19 @@ echo
 
 [ -x "$SP" ] || { echo "not built: $SP"; exit 1; }
 
+# PREFLIGHT. Everything below drives PipeWire through these two binaries, and
+# neither is a build dependency - a machine can compile Sonic Pi perfectly and
+# still not have them. Their absence used to be indistinguishable from a real
+# fault: `pactl get-default-sink` with stderr suppressed just returns nothing,
+# which surfaced as "no default sink - is PipeWire running?" on a box where
+# PipeWire was running fine.
+miss=
+for t in "pactl:pulseaudio-utils" "pw-link:pipewire-bin"; do
+  bin=${t%%:*}; pkg=${t##*:}
+  command -v "$bin" >/dev/null 2>&1 || { echo "missing: $bin   (apt install $pkg)"; miss=1; }
+done
+[ -n "$miss" ] && { echo; echo "install the package(s) above and try again."; exit 1; }
+
 # Refuse while Sonic Pi is up: it autosaves the workspace on its own schedule,
 # so anything written underneath a running GUI is overwritten by the copy the
 # editor still holds in memory. That failure is silent and looks like the
@@ -109,7 +130,35 @@ if [ "$MODE" = simulation ] && pw-link -i 2>/dev/null | grep -q "^$UMC:playback_
 else
   SINK=$(pactl get-default-sink 2>/dev/null)
 fi
-[ -n "$SINK" ] || { echo "no default sink - is PipeWire running?"; exit 1; }
+# Sinks present but no DEFAULT set is a recoverable state, not a fault: it
+# happens when WirePlumber has not chosen one, or when its stored default
+# points at a device that has since been unplugged - an absent UMC does
+# exactly that. Falling back to the first sink beats refusing to start, as
+# long as the choice is stated out loud. The routing line below prints it, and
+# production still aborts if the port count is wrong.
+if [ -z "$SINK" ] && [ "$(pactl list short sinks 2>/dev/null | wc -l)" -gt 0 ]; then
+  SINK=$(pactl list short sinks 2>/dev/null | head -1 | cut -f2)
+  echo "no default sink is set - falling back to the first one:"
+  echo "    $SINK"
+  echo "  (set one properly with: wpctl set-default <id>, see wpctl status)"
+fi
+
+if [ -z "$SINK" ]; then
+  # Three different faults used to share one message. Separate them.
+  if ! pactl info >/dev/null 2>&1; then
+    echo "pactl cannot reach a sound server."
+    echo "  Is PipeWire running for THIS user?"
+    echo "    systemctl --user status pipewire pipewire-pulse wireplumber"
+    echo "  Over SSH or on a bare TTY you also need an active user session -"
+    echo "  XDG_RUNTIME_DIR must be set and the user systemd instance running."
+  else
+    echo "a sound server is up, but it reports no default sink."
+    echo "  Is the interface connected and un-muted?"
+    echo "    pactl list short sinks"
+    echo "    wpctl status"
+  fi
+  exit 1
+fi
 
 # NB: this trusts pw-link to emit ports in channel order. It does for the UMC,
 # but the tool does not guarantee it - on a 12-out interface check the result

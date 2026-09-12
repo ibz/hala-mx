@@ -902,8 +902,63 @@ git clone --branch v4.6.0 https://github.com/sonic-pi-net/sonic-pi.git ~/src/son
 cd ~/src/sonic-pi/app && CC=gcc-12 CXX=g++-12 ./linux-build-all.sh
 ```
 
-- **gcc-12, not 13.** 24.04 defaults to gcc-13 and vcpkg's dependencies don't
-  build with it. `CC`/`CXX` in the environment is enough; cmake honours them.
+- **Use the distro's default compiler. Do not pin gcc-12.** The old advice
+  came from "vcpkg's dependencies don't build with gcc-13", which is true but
+  not of the *Linux* path — `app/CMakeLists.txt` gates the vcpkg toolchain to
+  `if (WIN32 OR APPLE)` and `linux-build-all.sh` never touches it. More
+  importantly, pinning an older compiler **breaks the Qt link**. GCC 13
+  re-versioned `__cxa_call_terminate` and dropped the old symbol: a current
+  libstdc++ exports it only at `CXXABI_1.3.15`, with no `CXXABI_1.3.5` compat
+  entry, while code from an older gcc still references the 1.3.5 form. The
+  result is
+
+  ```
+  undefined reference to `__cxa_call_terminate@CXXABI_1.3.5'
+  ```
+
+  surfacing against `libQt6Core`, which is simply the first big C++ library on
+  the link line. The compiler has to match the libstdc++ that the distro's Qt
+  was built against, so the script now leaves `CC`/`CXX` alone unless you set
+  them — `CC=gcc-12 CXX=g++-12 ./build-sonicpi-46.sh build` still works if a
+  specific compiler is ever genuinely needed.
+- **If CMake says Boost is missing while every Boost package is installed**,
+  there are two causes and the script now handles both.
+
+  *The `system` component no longer exists.* Boost.System has been
+  **header-only since Boost 1.69**, and newer packaging stopped shipping a
+  separate `boost_system` CMake config. But `app/api/CMakeLists.txt:75` still
+  asks for it:
+
+  ```cmake
+  find_package(Boost 1.74 REQUIRED COMPONENTS filesystem system thread)
+  ```
+
+  `REQUIRED` turns the missing config into a hard error, so a *completely*
+  installed Boost fails because of the one component that isn't a library any
+  more. Check with `ls -d /usr/lib/*/cmake/boost_system-*` — if that comes back
+  empty while the other `boost_*` directories are there, this is it. Dropping
+  the component is safe: nothing in the api links `boost::system` (its own
+  sources use header-only `algorithm/string`), and `Boost::filesystem` carries
+  its own transitive dependencies. Verified against 1.83 — the find still
+  yields `Boost::filesystem;Boost::thread`. The build script patches this only
+  when `boost_system` is genuinely absent, keeping `.orig` alongside, so on
+  24.04 the tree stays exactly as upstream ships it.
+
+- **A stale cache produces the same message.** `linux-config.sh` only does `mkdir -p build; cd build; cmake ..` —
+  it never wipes — so a configure that ran before the dependency was present
+  caches `Boost_DIR:PATH=Boost_DIR-NOTFOUND`, and **CMake never re-searches a
+  cached NOTFOUND**. `./session-scripts/build-sonicpi-46.sh clean` removes the
+  build directory; `build` also detects this particular poisoning and clears it
+  automatically.
+- **The PipeWire *runtime* tools are dependencies too, and they are not build
+  deps.** `start-46.sh` and `link-outs.sh` drive the graph through `pactl`
+  (`pulseaudio-utils`) and `pw-link` (`pipewire-bin`). Leaving them out gives a
+  build that compiles perfectly and then fails at launch with *"no default sink
+  — is PipeWire running?"* on a machine where PipeWire is running fine: `pactl`
+  simply is not installed, and with stderr suppressed its absence looks exactly
+  like an empty answer. `deps` now installs `pipewire pipewire-pulse
+  wireplumber pipewire-bin pulseaudio-utils`, and the launcher checks for the
+  binaries before it touches anything.
 - **Skip `pipewire-jack` only if you intend to run real jackd.** 4.6 detects
   PipeWire with `which pw-link` and then *will not start jackd for you* — it
   runs scsynth through `pw-jack`. Without that binary the launch is broken in
@@ -911,9 +966,12 @@ cd ~/src/sonic-pi/app && CC=gcc-12 CXX=g++-12 ./linux-build-all.sh
 - On Debian the Qt dev packages are `libqt6svg6-dev` / `libqt6opengl6-dev`; on
   Ubuntu 24.04 the same files come from `qt6-svg-dev` / `qt6-base-dev`.
 
-Binary lands at `~/src/sonic-pi/app/build/gui/sonic-pi`. scsynth is the
-**system** one (`/usr/bin/scsynth`, 3.13.0) — on Linux `Paths.scsynth_path`
-is just `"scsynth"` from PATH.
+Binary lands at `~/src/sonic-pi/app/build/gui/sonic-pi` — note the `gui/`
+subdirectory, which is what `start-46.sh` launches. Both scripts default to
+`~/src/sonic-pi` and honour `$SONIC_PI_SRC`; they must agree, since one
+produces the binary the other runs. scsynth is the **system** one
+(`/usr/bin/scsynth`, 3.13.0) — on Linux `Paths.scsynth_path` is just
+`"scsynth"` from PATH.
 
 ### 7c. Configuration — `audio-settings.toml`
 
@@ -980,8 +1038,14 @@ for both mechanisms.
 ```sh
 ./session-scripts/start-46.sh --simulation   # studio: 4 outputs on the UMC404HD
 ./session-scripts/start-46.sh --production   # hall: 12 outputs on the default sink
-./session-scripts/start-46.sh --production 8 # override the count for one run
+./session-scripts/start-46.sh --simulation 2  # a laptop's built-in stereo
+./session-scripts/start-46.sh --production 8  # a partially patched hall rig
 ```
+
+Without a number, **`--simulation` degrades to whatever the sink actually has**
+— plug nothing in and it warns, drops to 2, and sets `xen_rig_outputs` and
+`num_outputs` to match, so the piece folds its drawing onto the two speakers
+that exist rather than drawing into channels that don't.
 
 **Production refuses to start under-routed.** `head -n 12` on a sink with 8
 ports returns 8 and says nothing, which in the hall means discovering
@@ -1051,11 +1115,12 @@ output_xenakis_installation/       generated, not checked into git
   concat/                           output of build_pools.py (pools + cut tables)
   m0_render/                        output of render_m0.py
 session-scripts/                   build + launch + audio helpers
-  build-sonicpi-46.sh              builds Sonic Pi 4.6.0 (gcc-12, system scsynth)
+  build-sonicpi-46.sh              builds Sonic Pi 4.6.0 (deps|clone|build|clean|all)
   start-46.sh                      --production | --simulation: desk, routing, launch
   link-outs.sh                     repatches scsynth onto the interface (start-46 calls it)
   check-session.sh                 is it healthy right now? (delivery, not settings)
-  setup-audio.sh, revert-*.sh      5.0-era PipeWire pinning; kept for reference only
+  setup-audio.sh                   5.0-era PipeWire pinning; REFUSES to run on a 4.6 setup
+  revert-*.sh                      5.0-era; kept for reference only
   restore-sonicpi-config.sh        puts audio-settings.toml back
   set-buffer-2048.sh, try-alsa.sh  5.0-era experiments; kept for reference only
   start-session.sh                 the 5.0 launcher, superseded by start-46.sh

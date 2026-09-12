@@ -1,9 +1,31 @@
 #!/usr/bin/env bash
 #
-# setup-audio.sh - pin the audio system for a Xenakis / Hala MX session.
+# setup-audio.sh - SONIC PI 5.0 ONLY. Kept for reference; do not run it on 4.6.
 #
-# Two things end this piece mid-installation, and neither of them looks like
-# a bug in the piece: it just goes silent, with nothing in the Sonic Pi GUI.
+# ====================================================================
+#  THIS SCRIPT IS OBSOLETE FOR THE CURRENT SETUP.
+#
+#  It defends against two failure modes that belong to Sonic Pi 5.0's
+#  cold-swap/watchdog machinery - the exact machinery the piece moved to
+#  4.6 to escape (README 7a). On 4.6 it is at best useless and at worst
+#  harmful:
+#
+#    * It patches v5-audio-settings.toml. 4.6 reads audio-settings.toml,
+#      with no v5- prefix, and start-46.sh manages that file now,
+#      including setting num_outputs to match the venue mode.
+#    * It writes a STRICTER PipeWire pinning than the one in use:
+#      min = max = quantum-limit = 1024 plus a pinned rate, against the
+#      current 1024/1024/2048 with neither. Running it silently reverts a
+#      relaxation that was made deliberately.
+#
+#  On 4.6 use: ./start-46.sh --production | --simulation
+#  It refuses to run unless v5-audio-settings.toml exists; --anyway
+#  overrides, --check is read-only and always allowed.
+# ====================================================================
+#
+# What it was for. Two things ended the piece mid-installation on 5.0, and
+# neither looked like a bug in the piece: it just went silent, with nothing
+# in the Sonic Pi GUI.
 #
 #   1. A PipeWire RATE renegotiation. Sonic Pi answers a device change with a
 #      cold-swap reinit that nukes the running job's scsynth state. The
@@ -19,8 +41,9 @@
 # main reason this is a script and not a paragraph in the README.
 #
 #   ./setup-audio.sh            write config + apply runtime forces
-#   ./setup-audio.sh --check    verify only, change nothing
+#   ./setup-audio.sh --check    verify only, change nothing (always allowed)
 #   ./setup-audio.sh --restart  also restart PipeWire (INTERRUPTS ALL AUDIO)
+#   ./setup-audio.sh --anyway   run despite the 5.0 guard above
 #
 # After a --restart, restart Sonic Pi too: it latches its buffer size when it
 # opens the device, so changing the quantum under a running instance does
@@ -34,13 +57,15 @@ CARD="UMC404HD 192k Pro"
 CONF_DIR="$HOME/.config/pipewire/pipewire.conf.d"
 CONF="$CONF_DIR/99-hala-mx.conf"
 
-DO_WRITE=1 DO_FORCE=1 DO_RESTART=0
-case "${1:-}" in
-  --check)   DO_WRITE=0; DO_FORCE=0 ;;
-  --restart) DO_RESTART=1 ;;
-  "")        ;;
-  *) echo "usage: $0 [--check|--restart]" >&2; exit 2 ;;
-esac
+DO_WRITE=1 DO_FORCE=1 DO_RESTART=0 ANYWAY=0
+for a in "$@"; do
+  case "$a" in
+    --check)   DO_WRITE=0; DO_FORCE=0 ;;
+    --restart) DO_RESTART=1 ;;
+    --anyway)  ANYWAY=1 ;;
+    *) echo "usage: $0 [--check|--restart|--anyway]" >&2; exit 2 ;;
+  esac
+done
 
 red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -50,7 +75,34 @@ hdr()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 fail=0
 
 command -v pw-metadata >/dev/null || {
-  red "pw-metadata not found - is this machine actually running PipeWire?"; exit 1; }
+  red "pw-metadata not found - is PipeWire installed? (apt install pipewire-bin)"; exit 1; }
+
+# ------------------------------------------------------------------ guard ---
+# The 5.0 check. --check writes nothing, so it is always allowed; anything
+# that would touch the config or the graph has to pass this first.
+V5_TOML="$HOME/.sonic-pi/config/v5-audio-settings.toml"
+TOML_46="$HOME/.sonic-pi/config/audio-settings.toml"
+# Test the 4.6 file, NOT the absence of the 5.0 one. A machine that ran 5.0
+# before keeps v5-audio-settings.toml (and its .bak, .pre2048, .pre-alsa
+# siblings) forever, so "no v5 file" is false on exactly the machines this
+# guard exists to protect - it let the script through here and it overwrote a
+# live, deliberately relaxed PipeWire pinning. The presence of
+# audio-settings.toml means 4.6 has run, and that is the thing to refuse on.
+if [ "$ANYWAY" = 0 ] && [ "$((DO_WRITE + DO_FORCE + DO_RESTART))" -gt 0 ] \
+   && [ -f "$TOML_46" ]; then
+  red "REFUSING TO RUN - this is the Sonic Pi 5.0 setup script."
+  echo
+  echo "  $TOML_46 exists, so 4.6 is the version set up on this machine."
+  [ -f "$V5_TOML" ] && echo "  ($V5_TOML is also present - a leftover from the 5.0 era.)"
+  echo
+  echo "  On 4.6 this script would patch a file nothing reads, and would"
+  echo "  overwrite the PipeWire pinning with a stricter 5.0-era version."
+  echo "  Use instead:  ./start-46.sh --production | --simulation"
+  echo
+  echo "  ./setup-audio.sh --check    inspect without changing anything"
+  echo "  ./setup-audio.sh --anyway   override this guard"
+  exit 1
+fi
 
 # ---------------------------------------------------------------- config ---
 if [ "$DO_WRITE" = 1 ]; then
@@ -107,7 +159,13 @@ done
 # --------------------------------------------------------------- restart ---
 if [ "$DO_RESTART" = 1 ]; then
   hdr "Restarting PipeWire (this interrupts all audio)"
-  systemctl --user restart pipewire pipewire-pulse && grn "  ok" || { red "  failed"; fail=1; }
+  # wireplumber too. PipeWire is only the daemon - WirePlumber is the session
+  # manager that creates the device nodes and picks the defaults. Restarting
+  # the daemon without it leaves a server that answers `pactl info` perfectly
+  # and has ZERO sinks, which reads as "no default sink" and sends you looking
+  # in the wrong place entirely.
+  systemctl --user restart pipewire pipewire-pulse wireplumber \
+    && grn "  ok" || { red "  failed"; fail=1; }
   sleep 2
 fi
 
