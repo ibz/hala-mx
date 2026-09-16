@@ -1508,14 +1508,20 @@ limiter. The clouds peak ~0.4875 there (0.65 at `master_amp` 1.0, × the 0.75
 | `inhale_amp` | bed peak | coincident | power sum |
 |---|---|---|---|
 | 1.00 | 0.432 | 0.919 | 0.651 |
-| **1.19** | **0.500** | **0.987** | **0.698** |
+| 1.19 | 0.500 | 0.987 | 0.698 |
 | 1.26 | 0.520 | 1.007 ✗ | 0.713 |
-| 1.41 | 0.567 | 1.054 ✗ | 0.748 |
+| **1.41** | **0.567** | **1.054 ✗** | **0.748** |
 
-So **1.19 (+1.5 dB) is the last setting that cannot clip.** Above it the
-overflow only happens when a grain peak and a bed peak land in the same
-sample — the power sum stays around 0.75, so it is intermittent rather than
-constant — but there is no limiter to catch it when it does.
+**1.19 (+1.5 dB) is the last setting that cannot clip. The piece runs at 1.41
+(+3.0 dB) anyway** — chosen by ear on 2026-09-16 with the overflow understood
+and accepted. Above 1.19 the overflow only happens when a grain peak and a bed
+peak land in the same sample; the power sum stays around 0.75, so it is
+intermittent rather than constant — but there is no limiter to catch it when
+it does, and it clips the converter directly.
+
+If it turns out to be audible as clipping rather than as weight, the ways back
+are `xen_grains_amp` down (which undoes the clouds-vs-bed balance set by ear),
+`xen_master_amp` under 1.0, or simply 1.19.
 
 Getting more than +1.5 dB means giving something back: `xen_grains_amp` down
 (which undoes the clouds-vs-bed balance set by ear), or `xen_master_amp` below
