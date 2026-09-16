@@ -131,6 +131,20 @@ atmos_folders.each do |k, sub|
 end
 puts "XENAKIS: atmos #{atmos_lists.values.sum(&:size)} files in #{atmos_lists.size} families"
 
+# THE SLICE LENGTH, measured rather than assumed - the beds are stretched to
+# the cycle further down and this is what they are stretched FROM.
+# atmos_slice.py cuts every family at the same SLICE_S, so one file per
+# family is enough to know it; every family is checked against that anyway,
+# because a half-rebuilt atmos/ directory is exactly the state this catches.
+# The M=0 accents are included: they are read fractionally (finish: 0.35), so
+# their length matters too even though they are not beds.
+bed_len = sample_duration atmos_lists[:inh_a].first
+atmos_lists.each do |k, l|
+  d = sample_duration l.first
+  raise "Atmos: #{k} slices are #{'%.3f' % d} s but #{'%.3f' % bed_len} s elsewhere. " \
+        "atmos/ is half-rebuilt - re-run atmos_slice.py." if (d - bed_len).abs > 0.01
+end
+
 # A set = one file from each family.
 atmos_set = lambda { atmos_lists.map { |k, l| [k, l.choose] }.to_h }
 
@@ -158,20 +172,66 @@ puts "XENAKIS: loaded"
 # At t = 0.5 the intervals coincide exactly (2.5-4.5, center 3.5): that's
 # where they annihilate each other - M=0 as a spatial event, not just an
 # impact.
-# One cycle = 16.0 s, exactly as long as one atmos file. The granular phases
-# were stretched to fit, keeping the inhale:exhale ratio of 1 : 1.2 from the
-# earlier, shorter version. The densities (lambda) DIDN'T change: being
-# grains/second, the texture stays the same and so does the scheduler's event
-# rate - only the gesture takes longer. The ramps (pitch, lpf, blend,
-# entry_amp) are normalized on f = t/duration, so they stretch on their own.
-cycle_dur    = 16.0
+# One cycle = 16.0 s by default, exactly as long as one atmos slice. The
+# granular phases were stretched to fit. The densities (lambda) DIDN'T
+# change: being grains/second, the texture stays the same and so does the
+# scheduler's event rate - only the gesture takes longer. The ramps (pitch,
+# lpf, blend, entry_amp) are normalized on f = t/duration, so they stretch on
+# their own - which is the property that makes the length a knob at all.
+#
+# READ ONCE PER RUN. This line is top-level, like xen_density below, so
+# changing it needs Stop + Run - it is not a live tweak the way the amps are.
+cycle_dur    = get(:xen_cycle_dur, 16.0)
 # Atmos holds the whole cycle; the granular material sits INSIDE it, with a
 # margin at each end. That way atmos really does start before and end after.
 atmos_margin = 1.0
 # M=0 falls exactly at the midpoint of the cycle - the same point as node S6
 # and the geometric midpoint of the bridge between the hexagons (N_6, Y = 500
 # cm). The atmos and granular centers have to coincide.
-m0_center    = 8.0
+#
+# DERIVED, not written down. It used to be a literal 8.0 sitting next to a
+# literal 16.0, and the two drifting apart is exactly the failure a cycle
+# knob invites. Holding it at the midpoint is also what keeps the two
+# granular phases equal: both reduce to cycle_dur / 2 - 2.425 (see the
+# inhale_dur / exhale_dur derivation further down).
+m0_center    = cycle_dur / 2.0
+
+# THE BEDS STRETCH TO FIT, so the cycle is free of the slice length: any
+# duration works, not just a multiple of 16 s.
+#
+# pitch_stretch, NOT rate. Both stretch the buffer, but rate is varispeed -
+# at a 32 s cycle it would drop the whole bed an octave, and spec_f0 below is
+# MIDI 48 because 131 Hz is where the material's energy was MEASURED to sit.
+# Varispeed would walk the material out from under every tuned number in the
+# piece. pitch_stretch applies the same rate and then compensates the
+# transposition back with pitch:, so the spectrum stays where it was
+# measured and the resonances keep landing on it.
+#
+# The cost is that pitch: is SuperCollider's PitchShift - a granular shifter
+# on a 0.2 s window, not a phase vocoder (there is no PV_/FFT FX in Sonic
+# Pi at all; see the spectral note further down). On broadband breath
+# material a large correction smears and warbles, so the stretch is bounded
+# below. At cycle_dur == bed_len the rate is 1.0 and the compensation is 0
+# semitones, i.e. the default path is bit-identical to before this existed.
+#
+# pitch_stretch takes BEATS; use_bpm 60 at the top of this file makes a beat
+# one second, so cycle_dur passes straight through.
+bed_stretch = cycle_dur / bed_len
+bed_semis   = 12.0 * Math.log2(bed_stretch)
+if bed_stretch > 4.0 || bed_stretch < 0.25
+  raise "xen_cycle_dur #{cycle_dur} s against #{'%.3f' % bed_len} s atmos slices is a " \
+        "#{'%.2f' % bed_stretch}x stretch (#{'%+.1f' % bed_semis} semitones of PitchShift " \
+        "correction). Past 4x that is warble, not atmosphere - re-slice at a length " \
+        "closer to the cycle (SLICE_S = HOP_S in atmos_slice.py) and rebuild the pools."
+end
+# Envelopes follow the stretch on their own: sustain -1 resolves inside the
+# player synthdef against (1/rate) * buf-dur, so the atmos_margin fades still
+# land on the cycle's edges at any stretch. Nothing here has to scale them.
+if bed_stretch != 1.0
+  puts "XENAKIS: beds stretched #{'%.2f' % bed_stretch}x " \
+       "(#{'%.1f' % bed_len} s slice -> #{'%.1f' % cycle_dur} s cycle, " \
+       "#{'%+.1f' % bed_semis} semitones corrected)"
+end
 # Density multiplier. Each layer runs clean alone; only beds+grains together
 # drive the device below real-time (0.90x at bs=1024, 0.92x at 2048 - barely
 # helped by doubling the buffer, so it is voice COUNT, not burst headroom).
@@ -304,6 +364,22 @@ inhale_pause = m0_tail - 0.035
 # The granular phases, equal and symmetric around m0_center.
 inhale_dur = m0_center - m0_dur / 2.0 - atmos_margin - inhale_pause - 0.035
 exhale_dur = cycle_dur - atmos_margin - (m0_center + m0_dur / 2.0 + m0_tail)
+
+# With m0_center = cycle_dur / 2 both of the above reduce to
+# cycle_dur / 2 - 2.425, so they stay equal to each other on their own - but
+# they go NEGATIVE once the cycle drops under about 4.85 s, and a negative
+# sleep is a TimingError thrown from inside a Run rather than a sentence
+# here. The floor is derived from the constants, not written down, so it
+# follows m0_dur / m0_tail / atmos_margin if any of those ever move.
+phase_floor = 0.5
+if inhale_dur < phase_floor
+  fixed = cycle_dur - inhale_dur - exhale_dur
+  raise "xen_cycle_dur #{cycle_dur} s leaves only #{'%.3f' % inhale_dur} s per granular " \
+        "phase. The fixed costs - two #{atmos_margin} s margins, the " \
+        "#{'%.3f' % inhale_pause} s pause, m0_dur #{m0_dur}, m0_tail #{m0_tail} - take " \
+        "#{'%.3f' % fixed} s, so the shortest usable cycle is about " \
+        "#{'%.2f' % (fixed + 2 * phase_floor)} s."
+end
 cloud_exhale_positive = { span0: [7.0,  9.0], span1: [10.0, 12.0], lambda: 32.0 * xen_density, shape: 3 }
 cloud_exhale_negative = { span0: [8.0, 10.0], span1: [ 9.0, 11.0], lambda: 11.0 * xen_density, shape: 3 }
 
@@ -778,8 +854,10 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # evolution; this is the same decoupling.)
   #
   # The period must NOT divide into cycle_dur, or the rotation locks to the
-  # breath and stops being a second clock. 41 s against 16 s repeats only
-  # every 656 s.
+  # breath and stops being a second clock. 41 s against the default 16 s
+  # repeats only every 656 s. cycle_dur is a knob now (xen_cycle_dur), so
+  # that coprimality is no longer guaranteed by the two literals sitting
+  # next to each other - re-check this if you change the cycle.
   #
   # Bonus, and a real one: the same bed plays on three coherent speakers, so
   # it builds an interference pattern with fixed nulls. Rotating the
@@ -998,8 +1076,8 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
             steps = (cycle_dur / rot_step).floor
             steps.times do
               # vt, not a local counter: the phase has to stay continuous
-              # ACROSS cycles, or the rotation resets every 16 s and the
-              # second clock collapses back onto the breath.
+              # ACROSS cycles, or the rotation resets every breath and the
+              # second clock collapses back onto it.
               th = 2 * Math::PI * (vt / rot_period - ch_i.to_f / n_ch)
               g  = [1.0 + rot_depth * Math.cos(th), 0.0].max
               control node, amp: bed_amp * Math.sqrt(g)
@@ -1028,13 +1106,19 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                 # immediately, so nothing about the old path changes.
                 rot_on = rot_depth > 0.001 && n_ch >= 2
                 slide  = rot_on ? rot_step : 0
+                # pitch_stretch: the bed is one slice stretched over the
+                # whole breath, not a slice plus silence - see bed_stretch.
+                # At the default cycle it resolves to rate 1.0 / pitch 0,
+                # which is exactly what a bare `sample` did here before.
                 if spec_db.abs < 0.01
-                  bed = sample f, amp: bed_amp, amp_slide: slide,
+                  bed = sample f, pitch_stretch: cycle_dur,
+                                  amp: bed_amp, amp_slide: slide,
                                   attack: atmos_margin, release: atmos_margin
                   rotate.call(bed) if rot_on
                 else
                   with_fx :band_eq, freq: bed_note, res: spec_res, db: spec_db do
-                    bed = sample f, amp: bed_amp, amp_slide: slide,
+                    bed = sample f, pitch_stretch: cycle_dur,
+                                    amp: bed_amp, amp_slide: slide,
                                     attack: atmos_margin, release: atmos_margin
                     rotate.call(bed) if rot_on
                   end

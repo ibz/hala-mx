@@ -7,6 +7,24 @@
 set :xen_rig_outputs, 4    # 12 = Hala MX, 4 = UMC404HD in the studio
 set :xen_focus, :all       # :inhale :exhale :m0 :m0_ceil :m0_floor :all
 set :xen_layers, :both     # :both :atmos (beds only) :grains (granular only)
+set :xen_cycle_dur, 32.0   # one breath, in seconds. NOT a live tweak - it is read
+                           # once per Run, so changing it needs Stop + Run.
+                           # M=0 is derived from it (always the midpoint), both
+                           # granular phases stretch to fit, and the atmosphere
+                           # beds are STRETCHED over the cycle rather than looped -
+                           # pitch_stretch, so a 16 s slice covers 32 s without
+                           # dropping an octave and every tuned frequency in the
+                           # piece stays where it was measured.
+                           # Any length works, not just a multiple of 16. The cost
+                           # of a big stretch is PitchShift warble on the beds
+                           # (it is a granular shifter, not a phase vocoder), so
+                           # past 4x it is refused - re-slice instead.
+                           # M=0 itself does NOT stretch: the burst, its tail and
+                           # the accent are absolute, so a longer breath means
+                           # longer phases around the same impact.
+                           # Floor is ~4.85 s of fixed costs (margins, the M=0
+                           # pause, burst and tail) + room for the phases, so
+                           # nothing under about 6 s is usable.
 set :xen_density, 1.0      # grain density multiplier. 0.5 was the workaround for
                            # 5.0's watchdog; 4.6 runs full density (see README 7)
 set :xen_sched_ahead, 3.0  # scheduling lookahead for the breath loop. M=0 fires
@@ -39,7 +57,8 @@ set :xen_atmos_rotate, 0.0 # off
 set :xen_atmos_rotate_period, 41.0 # seconds, and deliberately NOT a divisor
                            # of the 16 s cycle - it has to be a second clock
                            # or it just locks to the breath. 41 against 16
-                           # repeats every 656 s.
+                           # repeats every 656 s. Re-check this against
+                           # xen_cycle_dur if you change the cycle.
                            # A hall feature: on 4 outputs the beds fold to 2
                            # channels and the rotation is only an L-R sway # the atmosphere accent at M=0 - over the bed
 set :xen_m0_ceil_amp, 0.85 # M=0's granular scalpel, trimmed -15% so the atmosphere
