@@ -7,24 +7,12 @@
 set :xen_rig_outputs, 12   # 12 = Hala MX, 4 = UMC404HD in the studio
 set :xen_focus, :all       # :inhale :exhale :m0 :m0_ceil :m0_floor :all
 set :xen_layers, :both     # :both :atmos (beds only) :grains (granular only)
-set :xen_cycle_dur, 32.0   # one breath, in seconds. NOT a live tweak - it is read
-                           # once per Run, so changing it needs Stop + Run.
-                           # M=0 is derived from it (always the midpoint), both
-                           # granular phases stretch to fit, and the atmosphere
-                           # beds are STRETCHED over the cycle rather than looped -
-                           # pitch_stretch, so a 16 s slice covers 32 s without
-                           # dropping an octave and every tuned frequency in the
-                           # piece stays where it was measured.
-                           # Any length works, not just a multiple of 16. The cost
-                           # of a big stretch is PitchShift warble on the beds
-                           # (it is a granular shifter, not a phase vocoder), so
-                           # past 4x it is refused - re-slice instead.
-                           # M=0 itself does NOT stretch: the burst, its tail and
-                           # the accent are absolute, so a longer breath means
-                           # longer phases around the same impact.
-                           # Floor is ~4.85 s of fixed costs (margins, the M=0
-                           # pause, burst and tail) + room for the phases, so
-                           # nothing under about 6 s is usable.
+set :xen_cycle_dur, 32.0   # one breath, in seconds. Read once per Run, so it
+                           # needs Stop + Run. M=0 stays the midpoint, the phases
+                           # stretch to fit, and the beds are pitch_stretched over
+                           # the cycle (not looped, not transposed). Any length
+                           # works; over 4x the slice is refused. Min ~6 s.
+                           # README 8a.
 set :xen_density, 1.0      # grain density multiplier. 0.5 was the workaround for
                            # 5.0's watchdog; 4.6 runs full density (see README 7)
 set :xen_sched_ahead, 3.0  # scheduling lookahead for the breath loop. M=0 fires
@@ -44,13 +32,8 @@ set :xen_atmos_amp, 1.30   # the atmosphere bed - sits OVER the granular materia
 set :xen_grains_amp, 0.75  # ALL granular material, UNDER the atmosphere - inhale/
                            # exhale clouds AND M=0's ceil/floor grains - lowered
                            # from 1.0 to push it further back, paired with the
-                           # xen_atmos_amp raise above.
-                           # LEFT AT 0.75 ON PURPOSE. Raising it back would lift
-                           # the M=0 funnel, but it lifts the clouds and the
-                           # scalpel by the same 2.5 dB, and it was the clouds-vs-
-                           # bed balance that was tuned by ear here. The funnel is
-                           # the only thing that actually needed help, so it gets
-                           # it on its own knob - see xen_m0_floor_amp below.
+                           # xen_atmos_amp raise above. Left here on purpose: the
+                           # funnel gets its own knob instead. README 8b.
 set :xen_atmos_m0_amp, 1.0 # tuned by ear on the live desk, 2026-09-16
 set :xen_atmos_rotate, 0.0 # off
                            # the beds TURN. Depth 0.0-1.0 of a travelling
@@ -74,31 +57,12 @@ set :xen_atmos_rotate_period, 41.0 # seconds, and deliberately NOT a divisor
                            # channels and the rotation is only an L-R sway # the atmosphere accent at M=0 - over the bed
 set :xen_m0_ceil_amp, 0.85 # M=0's granular scalpel, trimmed -15% so the atmosphere
                            # accent - same speakers, same 8 kHz band - can be heard
-set :xen_m0_floor_amp, 2.0 # M=0's funnel, +6.0 dB. It is LPF'd at 466 Hz on its own
-                           # speakers (5-8), so it hides nothing and never needed
-                           # trimming DOWN - but it does need trimming UP now.
-                           # WHY: xen_atmos_amp went 0.5 -> 1.30 (+8.3 dB) while
-                           # xen_grains_amp took the granular down 2.5, which left
-                           # the funnel 10.8 dB down against the bed in exactly the
-                           # band the two share. The scalpel on 1/2/11/12 never
-                           # noticed - it lives at 3-8 kHz with nothing near it -
-                           # so M=0 came apart: audible at the hexagons' far ends,
-                           # gone at the feet. Measured in the hall, 2026-09-16.
-                           # This is clean linear gain, not drive: the tanh's amp
-                           # is applied to the FX OUTPUT, after the saturator.
-                           # CEILING: these outs bypass the master limiter, and the
-                           # burst peaks 0.903 here. 2.216 is unity-peak; anything
-                           # above that clips the converter. The limit is on the
-                           # PRODUCT trim x xen_grains_amp, which must stay under
-                           # 1.66: at 2.0 x 0.75 = 1.5 the burst peaks 0.903, which
-                           # is the last stop with any margin left.
-                           # So this knob is worth 6.0 of the 10.8 dB and no more.
-                           # The funnel lands 4.8 dB under where it sat before the
-                           # tweak - the rest is not available at this bed level on
-                           # any knob. Closing it needs xen_atmos_amp back toward
-                           # 0.85, or xen_atmos_spectral down from 10.0, whose
-                           # resonances (131/262/392/523 Hz) sit directly on the
-                           # funnel's band and cost nothing elsewhere.
+set :xen_m0_floor_amp, 2.0 # M=0's funnel, +6.0 dB. LPF'd at 466 Hz on 5-8, where
+                           # the bed also lives, so the xen_atmos_amp raise buried
+                           # it by 10.8 dB while the scalpel at 3-8 kHz was
+                           # untouched. This wins back 6.0 of that; the product
+                           # trim x xen_grains_amp must stay under 1.66 or the
+                           # burst clips (no limiter on these outs). README 8b.
 set :xen_atmos_spectral, 10.0 # depth in dB of the beds' resonant partials
                            # turns the four broadband beds into four partials of
                            # one spectrum: noise in, pitch out.

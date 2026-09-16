@@ -1372,6 +1372,107 @@ than 1024.
 `@pipewire` group, which is ample — the `audio` group only adds `unlimited`,
 and scsynth does not lock memory unless passed `-L`.
 
+## 8. Breath length and the M=0 balance
+
+Both of these are desk knobs whose full reasoning would not fit in
+`sonic-pi-buffer.rb` — the desk has a hard 16320-byte ceiling (see Prerequisites,
+"The desk has a hard size ceiling"), so the long form lives here.
+
+### 8a. Breath length — `xen_cycle_dur`
+
+`cycle_dur` was a literal `16.0` next to a literal `m0_center = 8.0`. It is now
+`get(:xen_cycle_dur, 16.0)`, with `m0_center` **derived** as `cycle_dur / 2`.
+Deriving it is the point: the two numbers drifting apart is exactly what a
+cycle knob invites, and holding M=0 at the midpoint is also what keeps the two
+granular phases equal — both reduce to `cycle_dur / 2 - 2.425`.
+
+It is read at the top level, so it takes effect on Run, not on a save.
+
+**The beds are stretched, not looped.** The atmosphere has to hold the whole
+cycle, and a bed is one slice — 16 s as built (`atmos_slice.py`, `SLICE_S`).
+Playing it twice would leave a butt joint mid-breath, and each slice is faded
+250 ms in and out, so the seam would dip to near-silence; at 32 s that seam
+lands exactly on M=0. So the slice is stretched instead, with `pitch_stretch:`
+rather than `rate:`.
+
+That distinction matters. `rate:` is varispeed — at 32 s it would drop the
+whole bed an octave, and `xen_atmos_f0` is MIDI 48 because 131 Hz is where the
+material's energy was *measured* to sit. Varispeed walks the material out from
+under every tuned number in the piece. `pitch_stretch:` applies the same rate
+and compensates the transposition back, so the spectrum stays put.
+
+The cost is that the compensation is SuperCollider's `PitchShift`, a granular
+shifter on a 0.2 s window — there is no phase vocoder anywhere in Sonic Pi.
+On broadband breath material a large correction smears, so the stretch is
+refused past 4x. At `cycle_dur == bed_len` it resolves to rate 1.0 / pitch 0,
+i.e. the default path is unchanged.
+
+Envelopes follow the stretch without help: `sustain: -1` resolves inside the
+player synthdef against `(1/rate) * buf-dur` (`samplers.clj:114-115`), so the
+1 s `atmos_margin` fades still land on the cycle's edges at any stretch.
+
+| `xen_cycle_dur` | rate | pitch | phases each |
+|---|---|---|---|
+| 16 s (default) | 1.000 | +0 | 5.575 s |
+| 24 s | 0.667 | +7 | 9.575 s |
+| 32 s (current) | 0.500 | +12 | 13.575 s |
+
+M=0 itself does **not** stretch — `m0_dur`, `m0_tail` and the accent are
+absolute, so a longer breath means longer phases around the same impact.
+The floor is ~4.85 s of fixed costs, so nothing under about 6 s runs.
+`xen_atmos_rotate_period` (41 s) was chosen coprime with 16; re-check it if
+you change the cycle.
+
+### 8b. Why M=0's funnel needed `xen_m0_floor_amp`
+
+M=0 is two gestures on two disjoint speaker sets: the **scalpel**, HPF'd to
+2960–4186 Hz with +9 dB at 8372 Hz, on `quad_ceil` = 1, 2, 11, 12; and the
+**funnel**, LPF'd at 466 Hz, on `quad_floor` = 5, 6, 7, 8. Nothing granular
+from M=0 reaches 9 or 10 at all.
+
+The in-situ tuning of 2026-09-16 raised `xen_atmos_amp` 0.5 → 1.30 (+8.3 dB)
+and introduced `xen_grains_amp` at 0.75 (−2.5 dB). Net: **−10.8 dB of funnel
+against bed**, in the one band the two share — the beds are 81.5 % 125–500 Hz
+with +10 dB resonances at 131/262/392/523 Hz, and every one of channels 5–8
+carries a bed. The scalpel never noticed: it lives three octaves above
+anything else on its speakers. So M=0 came apart — present at the hexagons'
+far ends, gone at the feet.
+
+It is *not* a routing fault. `pw-link` (SC `out_1..12` → `AUX0-7` + `AUX12-15`),
+the Focusrite matrix (`Analogue 01-10` → `PCM 1-10`, `ADAT 1-8` → `PCM 13-20`)
+and every Line Out mute/level were checked and are correct. Nor is the bed
+literally masking it — measured, the funnel is still +14.3 dB over the bed
+below 466 Hz. The mechanism is the 10.8 dB relative collapse plus the band
+asymmetry: sub-466 Hz is barely localizable and sits where the ear is least
+sensitive, while the scalpel is 3–8 kHz with nothing competing.
+
+**The fix is on the funnel's own knob**, not by undoing the tuning:
+`xen_m0_floor_amp` 1.0 → 2.0. The tanh's `amp` is applied to the FX *output*,
+after the saturator (`fx.clj:322-326`), so it is clean linear gain rather than
+drive — increases work, which is not true of the amps upstream of the
+distortion.
+
+`xen_grains_amp` stays at 0.75 deliberately. Raising it would lift the funnel
+by the same amount, but it lifts the clouds and the scalpel with it, and the
+clouds-vs-bed balance is what was set by ear.
+
+**There is a hard ceiling.** These outputs bypass the master limiter, so the
+burst's absolute peak is the constraint, and it depends on the *product*
+`xen_m0_floor_amp × xen_grains_amp`, which must stay under 1.66:
+
+| atmos | grains | floor | funnel/bed | burst peak |
+|---|---|---|---|---|
+| 0.50 | 1.00 | 1.0 | +25.1 dB | 0.602 |
+| 1.30 | 0.75 | 1.0 | +14.3 dB | 0.451 |
+| **1.30** | **0.75** | **2.0** | **+20.3 dB** | **0.903** |
+| 1.30 | 0.75 | 2.216 | +21.2 dB | 1.000 — clips |
+
+So this knob is worth 6.0 of the 10.8 dB and no more; the funnel lands 4.8 dB
+under where it sat before the tuning. The rest is not available at this bed
+level on any knob. Closing it needs `xen_atmos_amp` back toward 0.85, or
+`xen_atmos_spectral` down from 10.0 — those resonances sit directly on the
+funnel's band and cost nothing elsewhere, which is the one to try first.
+
 ## Layout
 
 ```
