@@ -774,6 +774,14 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # same change in the hall. Before that it wasn't - on 4 outputs the bed
   # arrived 4.8 dB under where the same number put it in the hall.
   atmos_amp   = get(:xen_atmos_amp, 0.5)       # the bed, OVER the granular
+  # The two hexagons' beds, trimmed separately over atmos_amp - the same
+  # arrangement as xen_m0_ceil_amp / xen_m0_floor_amp, and for the same
+  # reason: inhale and exhale are not the same gesture and do not compete
+  # with the same thing. The inhale hexagon (1-6) shares its channels with
+  # the inhale clouds, the exhale hexagon (7-12) with the exhale clouds, and
+  # those two phases were never balanced against each other.
+  atmos_inh_amp = get(:xen_atmos_inhale_amp, 1.0)
+  atmos_exh_amp = get(:xen_atmos_exhale_amp, 1.0)
   atmos_m0amp = get(:xen_atmos_m0_amp, 0.75)   # the M=0 accent, over the bed
   grains_amp  = get(:xen_grains_amp, 1.0)      # ALL granular material, UNDER the atmosphere -
                                                 # inhale/exhale clouds AND M=0's ceil/floor grains.
@@ -1078,7 +1086,11 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
           # pumps; only its distribution turns. That holds at n = 3 in the
           # hall and n = 2 on the folded studio rig - but not at n = 1, where
           # there is nothing to rotate against, hence the guard.
-          bed_amp = atmos_amp * master_amp * bed_scale
+          # i is the insertion order of atmos_beds - inh_a, inh_b, exh_a,
+          # exh_b - the same index the partials are taken from, so 0..1 is
+          # the inhale hexagon and 2..3 the exhale one.
+          phase_trim = i < 2 ? atmos_inh_amp : atmos_exh_amp
+          bed_amp = atmos_amp * phase_trim * master_amp * bed_scale
           rotate = lambda do |node|
             steps = (cycle_dur / rot_step).floor
             steps.times do

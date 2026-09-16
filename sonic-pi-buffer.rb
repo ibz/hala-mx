@@ -29,6 +29,16 @@ set :xen_atmos_amp, 1.30   # the atmosphere bed - sits OVER the granular materia
                            # rig-compensated: the same number is the same balance
                            # on 4 outputs in the studio and on 12 in the hall
                            # tuned by ear on the live desk, 2026-09-16
+set :xen_atmos_inhale_amp, 1.19 # the inhale hexagon's beds (1-6), +1.5 dB over
+                           # xen_atmos_amp. Same idea as xen_m0_ceil/floor_amp:
+                           # the two phases trim against each other, not just
+                           # against the granular.
+                           # 1.19 is the LAST value that cannot clip: ch 1-6 also
+                           # carry the inhale clouds, the two sum after both tanhs
+                           # with no limiter, and they already peak 0.92 together.
+                           # 1.41 (+3 dB) sounds better and clips on a coincident
+                           # peak - see README 8c before raising it.
+set :xen_atmos_exhale_amp, 1.0  # the exhale hexagon's beds (7-12). Untouched.
 set :xen_grains_amp, 0.75  # ALL granular material, UNDER the atmosphere - inhale/
                            # exhale clouds AND M=0's ceil/floor grains - lowered
                            # from 1.0 to push it further back, paired with the

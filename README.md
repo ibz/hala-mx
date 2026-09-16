@@ -1473,6 +1473,55 @@ level on any knob. Closing it needs `xen_atmos_amp` back toward 0.85, or
 `xen_atmos_spectral` down from 10.0 — those resonances sit directly on the
 funnel's band and cost nothing elsewhere, which is the one to try first.
 
+### 8c. Inhale vs exhale beds — `xen_atmos_inhale_amp` / `xen_atmos_exhale_amp`
+
+`xen_atmos_amp` moves all four beds together. These two trim the hexagons
+against *each other* on top of it — the same arrangement as `xen_m0_ceil_amp`
+/ `xen_m0_floor_amp`, and for the same reason: inhale and exhale are not the
+same gesture and do not compete with the same thing. The inhale hexagon (1–6)
+shares its channels with the inhale clouds, the exhale hexagon (7–12) with the
+exhale clouds, and those two phases had never been balanced against each other
+at all.
+
+They key off the insertion order of `atmos_beds` — `inh_a, inh_b, exh_a,
+exh_b` — which is the same index the spectral partials are taken from, so
+`i < 2` is the inhale hexagon.
+
+**The bed itself has plenty of room.** It runs into `tanh krunch: 0.25` with
+no `amp:`, which ceilings it at 0.925, and the saturator is gentle over the
+useful range — measured through the real chain (source → `band_eq` 131 Hz
+Q 16.7 +10 dB → tanh):
+
+| `inhale_amp` | asked | bed peak | realised |
+|---|---|---|---|
+| 1.00 | +0.0 dB | 0.432 | +0.0 dB |
+| 1.41 | +3.0 dB | 0.567 | +2.9 dB |
+| 2.00 | +6.0 dB | 0.709 | +5.8 dB |
+| 4.00 | +12.0 dB | 0.893 | +11.0 dB |
+
+**The channel is what runs out, not the bed.** Channels 1–6 also carry the
+inhale clouds, and the two arrive through separate `sound_out` chains that sum
+*after* both tanhs — nothing catches that sum, these outputs bypass the master
+limiter. The clouds peak ~0.4875 there (0.65 at `master_amp` 1.0, × the 0.75
+`xen_grains_amp`), so:
+
+| `inhale_amp` | bed peak | coincident | power sum |
+|---|---|---|---|
+| 1.00 | 0.432 | 0.919 | 0.651 |
+| **1.19** | **0.500** | **0.987** | **0.698** |
+| 1.26 | 0.520 | 1.007 ✗ | 0.713 |
+| 1.41 | 0.567 | 1.054 ✗ | 0.748 |
+
+So **1.19 (+1.5 dB) is the last setting that cannot clip.** Above it the
+overflow only happens when a grain peak and a bed peak land in the same
+sample — the power sum stays around 0.75, so it is intermittent rather than
+constant — but there is no limiter to catch it when it does.
+
+Getting more than +1.5 dB means giving something back: `xen_grains_amp` down
+(which undoes the clouds-vs-bed balance set by ear), or `xen_master_amp` below
+1.0. The inhale channels were already at 0.92 before this knob existed; it
+does not create the headroom problem, it just spends what was left.
+
 ## Layout
 
 ```
