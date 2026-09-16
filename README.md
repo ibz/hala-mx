@@ -1037,10 +1037,54 @@ for both mechanisms.
 
 ```sh
 ./session-scripts/start-46.sh --simulation   # studio: 4 outputs on the UMC404HD
-./session-scripts/start-46.sh --production   # hall: 12 outputs on the default sink
+./session-scripts/start-46.sh --production   # hall: 12 outputs on the Focusrite 18i20
 ./session-scripts/start-46.sh --simulation 2  # a laptop's built-in stereo
 ./session-scripts/start-46.sh --production 8  # a partially patched hall rig
 ```
+
+**Production's interface is the Scarlett 18i20, found by name pattern** —
+same idea as the UMC above, so it doesn't depend on whatever WirePlumber
+happened to leave as the system default. It needs its ALSA profile switched
+once: `pactl set-card-profile alsa_card.usb-Focusrite_Scarlett_18i20_USB_*-00
+pro-audio` (WirePlumber remembers this per card and reapplies it on
+reconnect/reboot — check with `cat ~/.local/state/wireplumber/default-profile`).
+That profile exposes 20 discrete `playback_AUX0..19` ports, which are raw PCM
+channels 1-20 in order (`AUX0` = PCM 1, etc). **Do not trust PipeWire's own
+"Line Output N+M" labels for these** — they come from ACP's generic
+profile-set guessing and were wrong on this device. Nor is the `scarlett2`
+kernel driver's own control naming (`amixer -c <card> controls | grep -E
+"Line [0-9]+ \("`) fully trustworthy either — it labels `AUX6/7` as
+"Headphones 1 L/R", which reads as "not a real output," but on *this specific
+unit* channels 1-8 are all wired to real rear analog jacks regardless of that
+label. **The only thing that settled it was playing a tone on each port and
+listening** — see the per-channel tone test below. Confirmed 2026-09-16:
+
+| ports | confirmed by ear |
+|---|---|
+| `AUX0`–`AUX7` | the 8 real rear analog outs, in use |
+| `AUX8`–`AUX9` | front headphone jack ("Headphones 2") — silent, not wired to anything |
+| `AUX10`–`AUX11` | S/PDIF — untested, not currently used |
+| `AUX12`–`AUX15` | ADAT channels 1-4 — confirmed via the hall's ADAT expander (a Behringer Ultragain, first 4 outputs) |
+| `AUX16`–`AUX19` | ADAT channels 5-8 — wired in software, **untested**, only relevant above `--production 12` |
+
+So `start-46.sh` excludes only `AUX8`–`AUX11` (the unused headphone pair and
+S/PDIF) from production, not the wider range once assumed from the driver
+label alone. `--production 12` (the default) is `AUX0..7` + `AUX12..15` — all
+8 analog outs plus the expander's first 4 channels.
+
+> **A second, independent surprise, found the same way**: the 18i20 also has
+> its own internal source-routing matrix — every physical output (analog,
+> S/PDIF, ADAT) has an `amixer` `"... Playback Enum"` control choosing what
+> feeds it, separate from which raw PCM channel PipeWire thinks it's writing
+> to. `Analogue Output 01-10` happened to already point at `PCM 1-10` on this
+> unit, but `ADAT Output 1-8` did **not** point at `PCM 13-20` — every ADAT
+> tone test was silent even though PipeWire, ALSA channel count, and
+> mute/volume were all correct, because the matrix had those 8 outputs
+> pointed at other inputs/PCM channels entirely. `start-46.sh`'s
+> `fix_focusrite_adat_routing()` sets all 8 to `PCM 13`..`PCM 20` on every
+> production run — it's idempotent, but do not assume it "must have stuck"
+> from a prior run; this is exactly the kind of state a Focusrite Control
+> change (by anyone, on any OS) or a firmware update could silently revert.
 
 Without a number, **`--simulation` degrades to whatever the sink actually has**
 — plug nothing in and it warns, drops to 2, and sets `xen_rig_outputs` and
@@ -1072,12 +1116,49 @@ want:
 ./session-scripts/link-outs.sh "$SINK:playback_AUX2,$SINK:playback_AUX3"
 ```
 
-> **The hall path is untested against a real 12-out rig.** `start-46.sh` builds
-> its port list with `pw-link -i | … | head -n "$N"`, which relies on `pw-link`
-> emitting ports in channel order. It did for the UMC, and the production path
-> has been exercised against a simulated 12-port sink, but the tool does not
-> guarantee that order — check the assignment against `monitors.tsv` before
-> trusting it.
+> **Channel order still relies on `pw-link` emitting ports in ascending
+> order**, which it has for both the UMC and the Focusrite's `pro-audio`
+> profile (checked 2026-09-16 — the string ordering of the 18i20's 20 `AUX*`
+> ports is ascending), but the tool does not guarantee it. That is a *port
+> naming* check, not proof that `AUX4` is wired to hall channel 5 — do the
+> physical tone test below before trusting either.
+
+**Per-channel tone test — do this before any real hall run, and again after
+any firmware/driver update or Focusrite Control change.** Confirms which
+physical jack (or ADAT-expander channel) each port actually reaches, since
+neither PipeWire's ACP labels nor the driver's control names are a
+substitute for listening. PipeWire holds the card exclusively, so raw ALSA
+tools like `speaker-test -D hw:2,0` fail with "device busy" while it's
+running — and **`pw-play --target <sink>:<port>` does not work either**: despite
+looking like it should, `--target` only accepts a node name/serial, not a
+port suffix, so it silently falls back to auto-connect and every "test"
+lands on the same one or two ports. The only mechanism that actually works
+is the same one `link-outs.sh` uses: start the stream with `--target 0`
+("don't auto-link"), then `pw-link` its port to the exact one under test:
+
+```sh
+SINK="alsa_output.usb-Focusrite_Scarlett_18i20_USB_<serial>-00.pro-output-0"
+BEEP="/path/to/a/short/mono/wav"   # a mono file - a stereo one creates two ports
+
+for aux in AUX0 AUX1 AUX2 AUX3 AUX4 AUX5 AUX6 AUX7 AUX12 AUX13 AUX14 AUX15; do
+  pw-play --target 0 --channels 1 "$BEEP" >/dev/null 2>&1 &
+  pid=$!
+  for _ in $(seq 20); do  # wait for its port to appear, up to ~1s
+    pw-link -o 2>/dev/null | grep -qx "pw-play:output_MONO" && break
+    sleep 0.05
+  done
+  pw-link "pw-play:output_MONO" "$SINK:playback_$aux" \
+    && echo "=== $aux — listening now ===" \
+    || echo "=== $aux — LINK FAILED ==="
+  wait "$pid" 2>/dev/null
+  sleep 0.5
+done
+```
+
+Walk the room (or the rack, for the ADAT expander) confirming each one
+against `monitors.tsv`, in order. Write the confirmed mapping down once
+verified; until then, treat any AUX-to-jack table as a hypothesis, not a
+fact — the one above only became trustworthy after exactly this test.
 
 ### 7e. Verify
 

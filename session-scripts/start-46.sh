@@ -3,7 +3,7 @@
 # start-46.sh - launch Sonic Pi 4.6.0 for a stated venue, with output routed to
 # the right interface and the checked-in desk installed.
 #
-#   ./start-46.sh --production     Hala MX: 12 outputs, bleep OFF
+#   ./start-46.sh --production     Hala MX: 12 outputs on the Focusrite 18i20, bleep OFF
 #   ./start-46.sh --simulation     studio:   4 outputs on the UMC404HD, bleep ON
 #
 #   --keep        launch with whatever Buffer 0 already had (no desk install)
@@ -40,6 +40,39 @@
 # daemon.rb's timer and then repatches to exactly $PORTS. Both mechanisms use
 # the same port list computed below, so there is one source of truth.
 #
+# THE PRODUCTION INTERFACE (Focusrite Scarlett 18i20) needs its own care, in
+# two independent ways - confirmed by an actual per-channel tone test against
+# the hall wiring on 2026-09-16, not just read off a label:
+#
+# 1. ALSA PROFILE. In the default "HiFi" profile it splits into a pile of
+#    small stereo sinks, not one multichannel node - switch it once with
+#    `pactl set-card-profile alsa_card.usb-Focusrite_Scarlett_18i20_USB_*-00
+#    pro-audio` (WirePlumber remembers the choice per card, like it does for
+#    the UMC). That profile exposes 20 discrete "playback_AUX0..19" ports,
+#    which are raw PCM channels 1-20 in order (AUX0 = PCM 1, etc). PipeWire's
+#    own "Line Output N+M" labels for these are an ACP guess and often WRONG.
+#    Confirmed by ear: AUX0-7 (PCM 1-8) are the 8 real rear analog outs in
+#    use here; AUX8-9 (PCM 9-10) are unused front headphone jacks; AUX10-11
+#    are S/PDIF (untested); AUX12-19 are ADAT.
+#
+# 2. ROUTING MATRIX. Separately from all of the above, the 18i20 has its own
+#    internal source-routing matrix - EVERY physical output (analog, S/PDIF,
+#    ADAT) has an `amixer` "... Playback Enum" control picking what feeds it,
+#    independent of which raw PCM channel PipeWire/ALSA thinks it's writing
+#    to. `Analogue Output 01-10` happened to already be wired straight to
+#    `PCM 1-10` on this unit, but `ADAT Output 1-8` was NOT wired to
+#    `PCM 13-20` - it was pointed at unrelated inputs/PCM channels, so ADAT
+#    was silent even though everything upstream (PipeWire routing, ALSA
+#    channel count, mute/volume) was correct. fix_focusrite_adat_routing()
+#    below sets it every run, since there is no guarantee this survives a
+#    power cycle or a Focusrite Control change made by someone else.
+#
+# CONFIRMED WORKING (2026-09-16): 8 analog (AUX0-7) + the hall's ADAT
+# expander's first 4 channels (AUX12-15) = the 12 channels production uses.
+# The expander's other 4 channels (AUX16-19) are wired in software but
+# UNTESTED against real hardware - only relevant if someone later runs
+# `--production` with N > 12.
+#
 # It also installs the desk. Sonic Pi's workspaces are its OWN storage - plain
 # text at ~/.sonic-pi/store/default/workspace_<n>.spi, Buffer 0 being "zero" -
 # and it AUTOSAVES them while running. So the buffer you edited in the GUI last
@@ -63,6 +96,35 @@ WS="$HOME/.sonic-pi/store/default/workspace_zero.spi"
 BAKDIR="$HOME/.sonic-pi/workspace-backups"
 TOML="$HOME/.sonic-pi/config/audio-settings.toml"
 UMC="alsa_output.usb-BEHRINGER_UMC404HD_192k-00.pro-output-0"
+# Scarlett 18i20 (production, in the hall). Matched by pattern, not exact
+# name - the serial number in the middle is specific to one physical unit.
+FOCUSRITE_RE='^alsa_output\.usb-Focusrite_Scarlett_18i20_USB_[^.]+-00\.pro-output-0$'
+
+# See "ROUTING MATRIX" above. Idempotent - safe to call every run.
+fix_focusrite_adat_routing() {
+  local card
+  card=$(aplay -l 2>/dev/null | sed -n 's/^card \([0-9]*\): .*Scarlett 18i20.*/\1/p' | head -1)
+  if [ -z "$card" ]; then
+    echo "WARNING: could not find the Scarlett 18i20's ALSA card number - ADAT routing not checked"
+    return
+  fi
+  command -v amixer >/dev/null 2>&1 || {
+    echo "WARNING: amixer not found (apt install alsa-utils) - ADAT routing not checked"; return; }
+  local i pcm before after
+  for i in 1 2 3 4 5 6 7 8; do
+    pcm="PCM $((12 + i))"
+    before=$(amixer -c "$card" cget "name='ADAT Output $i Playback Enum'" 2>/dev/null \
+      | sed -n "s/.*: values=\([0-9]*\)/\1/p")
+    amixer -c "$card" cset "name='ADAT Output $i Playback Enum'" "$pcm" >/dev/null 2>&1
+    after=$(amixer -c "$card" cget "name='ADAT Output $i Playback Enum'" 2>/dev/null \
+      | sed -n "s/.*: values=\([0-9]*\)/\1/p")
+    if [ "$before" = "$after" ]; then
+      echo "  ADAT Output $i: already $pcm"
+    else
+      echo "  ADAT Output $i: -> $pcm (was item #$before)"
+    fi
+  done
+}
 
 usage() {
   sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'
@@ -125,8 +187,18 @@ fi
 # ports we hoped for: it is what the piece folds the spatial drawing onto, so a
 # desk claiming 12 over an 8-port graph draws into channels that do not exist.
 # Resolving here means the install below writes the real number.
+FOCUSRITE=$(pactl list short sinks 2>/dev/null | cut -f2 | grep -E "$FOCUSRITE_RE" | head -1)
 if [ "$MODE" = simulation ] && pw-link -i 2>/dev/null | grep -q "^$UMC:playback_"; then
   SINK="$UMC"
+elif [ "$MODE" = production ] && [ -n "$FOCUSRITE" ]; then
+  # Same idea as the UMC above: the hall interface, when present, is always
+  # the right choice for production - do not depend on whatever WirePlumber
+  # happened to pick as the system default (that can drift, e.g. after a
+  # reboot picks the HDMI monitor's sink instead).
+  SINK="$FOCUSRITE"
+  echo "Focusrite ADAT routing (its own internal matrix, separate from PipeWire):"
+  fix_focusrite_adat_routing
+  echo
 else
   SINK=$(pactl get-default-sink 2>/dev/null)
 fi
@@ -163,7 +235,25 @@ fi
 # NB: this trusts pw-link to emit ports in channel order. It does for the UMC,
 # but the tool does not guarantee it - on a 12-out interface check the result
 # against monitors.tsv before trusting the assignment.
-PORTS=$(pw-link -i 2>/dev/null | grep "^$SINK:playback_" | head -n "$N" | paste -sd,)
+if [[ "$SINK" =~ $FOCUSRITE_RE ]]; then
+  # Scarlett 18i20's 20 "playback_AUX*" ports (raw PCM channels 1-20, in
+  # order). CONFIRMED BY EAR on 2026-09-16 against the actual hall wiring:
+  #   AUX0-7    the 8 real rear analog outs in use here
+  #   AUX8/9    front headphone jack ("Headphones 2") - unused, not wired
+  #   AUX10/11  S/PDIF - untested, not currently used
+  #   AUX12-19  ADAT - first 4 (AUX12-15) confirmed via the hall's expander,
+  #             the other 4 (AUX16-19) wired in software but untested
+  # Both headphone-jack ports (AUX8-11, which also covers S/PDIF) must still
+  # be excluded from the auto-built list even though the analog block turned
+  # out to be 8 wide rather than the 6 first assumed from PipeWire's ACP
+  # labels alone.
+  PORTS=$(pw-link -i 2>/dev/null \
+    | grep -E "^$SINK:playback_AUX[0-9]+$" \
+    | grep -vE ":playback_AUX(8|9|10|11)$" \
+    | sort -V | head -n "$N" | paste -sd,)
+else
+  PORTS=$(pw-link -i 2>/dev/null | grep "^$SINK:playback_" | head -n "$N" | paste -sd,)
+fi
 [ -n "$PORTS" ] || { echo "no playback ports on $SINK - is the interface connected?"; exit 1; }
 found=$(printf '%s' "$PORTS" | tr ',' '\n' | grep -c .)
 

@@ -13,7 +13,7 @@
 # sonic-pi-buffer.rb) from wherever it points `piece` at. run_file doesn't
 # execute this file as a real Ruby file, so __FILE__ can't self-locate here -
 # the fallback below is only a safety net if this is ever run standalone.
-project_dir = get(:xen_project_dir, "/home/ibz/src/hala-mx")
+project_dir = get(:xen_project_dir, "/home/mx/src/hala-mx")
 path_base   = project_dir + "/output_xenakis_installation/"
 path_inhale = path_base + "inhale/"
 path_blast  = path_base + "sonic_blast_m0/"

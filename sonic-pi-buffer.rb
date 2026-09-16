@@ -135,7 +135,7 @@ set :xen_seed, 0           # which rendition of the piece; changing it needs Sto
                            # identically: set :xen_seed, Time.now.to_i
 
 # ---- load + hot-reload the library ----
-piece = "/home/ibz/src/hala-mx/xenakis.rb"
+piece = "/home/mx/src/hala-mx/xenakis.rb"
 
 # xenakis.rb can't self-locate: run_file doesn't execute it as a real Ruby
 # file, so __FILE__ resolves to nothing inside it, and NOTHING but Time State
