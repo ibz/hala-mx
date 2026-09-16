@@ -4,7 +4,7 @@
 # xenakis.rb is a library and doesn't get touched.
 # ============================================
 
-set :xen_rig_outputs, 12   # 12 = Hala MX, 4 = UMC404HD in the studio
+set :xen_rig_outputs, 4    # 12 = Hala MX, 4 = UMC404HD in the studio
 set :xen_focus, :all       # :inhale :exhale :m0 :m0_ceil :m0_floor :all
 set :xen_layers, :both     # :both :atmos (beds only) :grains (granular only)
 set :xen_density, 1.0      # grain density multiplier. 0.5 was the workaround for
@@ -19,15 +19,10 @@ set :xen_sched_ahead, 3.0  # scheduling lookahead for the breath loop. M=0 fires
                            # README 4, "Lookahead, and why Stop is dangerous" -
                            # on 4.6 the tradeoff is spikes vs. Stop safety, not
                            # spikes vs. the piece dying, which is what it was on 5.0
-set :xen_atmos_amp, 1.30   # the atmosphere bed - sits OVER the granular material
+set :xen_atmos_amp, 0.5    # the atmosphere bed - sits OVER the granular material
                            # rig-compensated: the same number is the same balance
                            # on 4 outputs in the studio and on 12 in the hall
-                           # tuned by ear on the live desk, 2026-09-16
-set :xen_grains_amp, 0.75  # ALL granular material, UNDER the atmosphere - inhale/
-                           # exhale clouds AND M=0's ceil/floor grains - lowered
-                           # from 1.0 to push it further back, paired with the
-                           # xen_atmos_amp raise above
-set :xen_atmos_m0_amp, 1.0 # tuned by ear on the live desk, 2026-09-16
+set :xen_atmos_m0_amp, 0.75
 set :xen_atmos_rotate, 0.0 # off
                            # the beds TURN. Depth 0.0-1.0 of a travelling
                            # amplitude wave around the channels each bed
@@ -134,7 +129,7 @@ set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
                            # on beds + clouds; all of M=0 stays at unity
 set :xen_enhance_threshold, 0.2 # where the 118 decides a signal is "quiet"
 set :xen_master_amp, 1.0   # overall trim - the discrete outputs do NOT go through the limiter
-set :xen_bleep, false      # studio reference: a beep at the cycle boundaries (OFF in the hall)
+set :xen_bleep, true       # studio reference: a beep at the cycle boundaries (OFF in the hall)
 set :xen_seed, 0           # which rendition of the piece; changing it needs Stop + Run
                            # for an installation that never repeats
                            # identically: set :xen_seed, Time.now.to_i

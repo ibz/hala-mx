@@ -699,13 +699,6 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # arrived 4.8 dB under where the same number put it in the hall.
   atmos_amp   = get(:xen_atmos_amp, 0.5)       # the bed, OVER the granular
   atmos_m0amp = get(:xen_atmos_m0_amp, 0.75)   # the M=0 accent, over the bed
-  grains_amp  = get(:xen_grains_amp, 1.0)      # ALL granular material, UNDER the atmosphere -
-                                                # inhale/exhale clouds AND M=0's ceil/floor grains.
-                                                # Mirrors atmos_amp, so the two can be balanced
-                                                # against each other independently of master_amp.
-                                                # Does NOT touch atmos_m0amp (the M=0 atmosphere
-                                                # accent) or the relative ceil:floor trim within
-                                                # M=0 - those stay their own separate knobs.
 
   # M=0's two halves, trimmed separately over m0_amp. They are NOT the same
   # gesture and they do not compete with the same thing.
@@ -1089,7 +1082,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                        traj_width: traj_width,
                        pitch_from: 1.4, pitch_to: 0.95, pitch_jit: 0.04,
                        lpf_from: 120,   lpf_to: 75,     lpf_jit: 3,
-                       amp_lo: 0.155 * master_amp * grains_amp, amp_hi: 0.31 * master_amp * grains_amp,
+                       amp_lo: 0.155 * master_amp, amp_hi: 0.31 * master_amp,
                        # down the slope: full height at S1, the speaker plane
                        # by M=0.
                        blauert: blauert_ramp.call(tilt_top, tilt_bottom, blauert_amt),
@@ -1116,7 +1109,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       quad_ceil.each_with_index do |quad_chan, i|
         in_thread do
           with_fx :sound_out, output: quad_chan, amp: 0 do
-            with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_ceil_trim * grains_amp,
+            with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_ceil_trim,
                             amp_slide: m0_fade do |vol|
               # amp: 6 is makeup gain, placed AFTER the filter - the HPF cuts
               # ~76% of the energy; without it the scalpel would be the
@@ -1168,7 +1161,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       quad_floor.each_with_index do |floor_chan, i|
         in_thread do
         with_fx :sound_out, output: floor_chan, amp: 0 do
-          with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_floor_trim * grains_amp,
+          with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_floor_trim,
                           amp_slide: m0_fade do |vol|
             # The grain amplitudes are already baked into the render, as the
             # ATTACK stage of the distortion (dry peak ~3.1 - that's why the
@@ -1215,7 +1208,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                        # handled by the "long only" pools, not by darkening
                        # the filter.
                        lpf_from: 88,    lpf_to: 112,    lpf_jit: 4,
-                       amp_lo: 0.138 * master_amp * grains_amp, amp_hi: 0.345 * master_amp * grains_amp,
+                       amp_lo: 0.138 * master_amp, amp_hi: 0.345 * master_amp,
                        entry_amp: 2.4,
                        # back up it: the exhale is the inhale's ramp reversed,
                        # leaving M=0 on the plane and recovering S11's 4.00 m.
