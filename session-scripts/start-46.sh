@@ -182,6 +182,87 @@ if pgrep -x sonic-pi >/dev/null 2>&1; then
   exit 1
 fi
 
+# REAP A PREVIOUS SESSION'S BACKEND.
+#
+# The check above has to stay a REFUSAL rather than a kill: Sonic Pi autosaves
+# Buffer 0 on its own schedule, so killing a live editor can lose what is in
+# it. But `pgrep -x sonic-pi` only ever sees the GUI, and when a session dies
+# badly the GUI is precisely the part that goes - the backend survives it.
+# tau/beam, spider-server, daemon.rb and scsynth all outlive their window, so
+# the guard passes and the next launch starts on top of the corpse.
+#
+# That is not cosmetic. Measured on this machine 2026-09-16: an orphaned tau
+# from a launch one minute earlier (reparented to systemd --user) sat there
+# while a fresh session came up beside it, and every OSC packet arriving at the
+# new spider's API port died in the decoder -
+#
+#     Critical: UDP Server Spider API Server for port [...37330...]
+#     undefined method `%' for nil        (osc/oscdecode.rb:100)
+#
+# two taus with different port maps and tokens talking at one runtime. The GUI
+# opened, scsynth booted, the log said "Booted Successfully", and Run did
+# nothing at all - no error, no job, nothing anywhere near the piece. The only
+# symptom was silence.
+#
+# So: no GUI, but backend remnants => clear them before launching.
+SPROOT="${SONIC_PI_SRC:-$HOME/src/sonic-pi}"
+
+# Matched by PATH under the Sonic Pi tree, then filtered by process name.
+# Both halves matter: the path alone would also match an editor that happens
+# to have one of these files open, and killing somebody's editor is a far
+# worse failure than the one this is fixing.
+sp_remnants() {
+  local pids p comm out=
+  pids=$( { pgrep -x scsynth
+            pgrep -f "$SPROOT/app/build/gui/sonic-pi"
+            pgrep -f "$SPROOT/app/server/ruby/bin/daemon\.rb"
+            pgrep -f "$SPROOT/app/server/ruby/bin/spider-server\.rb"
+            pgrep -f "$SPROOT/app/server/beam/tau"; } 2>/dev/null | sort -un)
+  for p in $pids; do
+    comm=$(ps -o comm= -p "$p" 2>/dev/null)
+    case "$comm" in
+      sonic-pi|scsynth|beam.smp|erl_child_setup|ruby|ruby3.3|sh|epmd) out="$out $p" ;;
+    esac
+  done
+  echo $out
+}
+
+sp_wait_gone() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ -z "$(sp_remnants)" ] && return 0
+    sleep 0.3
+  done
+  [ -z "$(sp_remnants)" ]
+}
+
+leftovers=$(sp_remnants)
+if [ -n "$leftovers" ]; then
+  echo "leftover Sonic Pi processes from a previous session:"
+  # shellcheck disable=SC2086
+  ps -o pid=,cmd= -p $leftovers 2>/dev/null | cut -c1-100 | sed 's/^/  /'
+  # shellcheck disable=SC2086
+  kill $leftovers 2>/dev/null
+  # beam.smp does NOT die on SIGTERM - it ignores it and holds its ports.
+  # Confirmed here: TERM took the GUI, daemon.rb, scsynth and both boot
+  # scripts and left BOTH Erlang VMs running. So TERM, wait, then KILL
+  # whatever is still standing rather than assuming TERM was enough.
+  if ! sp_wait_gone; then
+    still=$(sp_remnants)
+    # shellcheck disable=SC2086
+    kill -9 $still 2>/dev/null
+    sp_wait_gone
+  fi
+  if [ -n "$(sp_remnants)" ]; then
+    echo
+    echo "ERROR: could not clear them - refusing to launch on top:"
+    # shellcheck disable=SC2086
+    ps -o pid=,cmd= -p $(sp_remnants) 2>/dev/null | cut -c1-100 | sed 's/^/  /'
+    exit 1
+  fi
+  echo "  cleared."
+fi
+
 # --- routing, resolved FIRST ------------------------------------------------
 # The desk's xen_rig_outputs has to match the ports actually found, not the
 # ports we hoped for: it is what the piece folds the spatial drawing onto, so a
@@ -288,6 +369,45 @@ else
   echo "WARNING: $TOML not found - scsynth will use its own default"
 fi
 echo
+
+# --- the desk has a HARD SIZE CEILING ---------------------------------------
+#
+# Pressing Run sends the WHOLE buffer to the runtime as one OSC string argument
+# (/run-code, spider-server.rb:286), and the listener reads it with
+# `recvfrom(16384)` (osc/udp_server.rb:89). A datagram bigger than that is
+# silently TRUNCATED by the kernel on read, the trailing string argument loses
+# its NUL terminator, and the decoder dies:
+#
+#     Critical: UDP Server Spider API Server ... had issues receiving
+#     undefined method `%' for nil        (osc/oscdecode.rb:100)
+#
+# The listener `redo`s, so it survives and keeps serving - which is exactly what
+# makes this so nasty. There is no crash, no message in the GUI, and no job:
+# Run just does NOTHING, once per press, forever. Sonic Pi boots perfectly and
+# the log says "Booted Successfully". Diagnosed 2026-09-16 after the desk grew
+# past the line, having first blamed a stale tau.
+#
+# So: refuse to install a desk that cannot be run, and say so with the number.
+# Reproduced directly against Sonic Pi's own encoder/decoder, not inferred.
+OSC_LIMIT=16384          # osc/udp_server.rb:89, recvfrom buffer
+OSC_OVERHEAD=64          # /run-code + type tags + token + workspace name, padded
+DESK_MAX=$(( OSC_LIMIT - OSC_OVERHEAD ))
+desk_bytes=$(wc -c < "$BUFFER")
+if [ "$desk_bytes" -gt "$DESK_MAX" ]; then
+  echo "ERROR: the desk is too big to run."
+  echo "  $BUFFER is $desk_bytes bytes; the limit is $DESK_MAX."
+  echo
+  echo "  Run sends the whole buffer as one OSC string and the runtime reads"
+  echo "  only $OSC_LIMIT bytes, so this would install fine and then Run would do"
+  echo "  nothing at all, with no error anywhere. Trim $(( desk_bytes - DESK_MAX ))"
+  echo "  bytes of comments - the long-form rationale belongs in README.md."
+  exit 1
+fi
+if [ "$desk_bytes" -gt $(( DESK_MAX - 512 )) ]; then
+  echo "WARNING: desk is $desk_bytes bytes, within 512 of the $DESK_MAX limit."
+  echo "  Past it, Run silently does nothing. Move commentary to README.md."
+  echo
+fi
 
 # --- install the desk into Buffer 0 -----------------------------------------
 if [ "$KEEP" = 1 ]; then

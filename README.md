@@ -39,7 +39,52 @@ declared in the header, no separate venv needed: `./grains_slice.py`,
   the interface rather than the built-in speakers (§7d), writes the venue's rig
   and bleep into Buffer 0, and sets `num_outputs` in `audio-settings.toml` to
   match. There is no default mode on purpose: both differences are silent when
-  wrong, and a bleep in front of an audience is not recoverable.
+  wrong, and a bleep in front of an audience is not recoverable. It also
+  **reaps a previous session's backend** before launching — see below.
+- **The desk has a hard size ceiling of 16320 bytes, and going past it makes
+  Run do nothing at all.** Pressing Run sends the *whole buffer* to the runtime
+  as one OSC string argument (`/run-code`, `spider-server.rb:286`), and the
+  listener reads it with `recvfrom(16384)` (`osc/udp_server.rb:89`). A larger
+  datagram is silently **truncated** on read, the trailing string loses its NUL
+  terminator, and the decoder throws:
+
+  ```
+  Critical: UDP Server Spider API Server ... had issues receiving
+  undefined method `%' for nil        (osc/oscdecode.rb:100)
+  ```
+
+  The listener `redo`s and survives, which is what makes this so nasty: no
+  crash, nothing in the GUI, and no job — just **one log entry per Run press and
+  otherwise silence**, while Sonic Pi reports "Booted Successfully" and looks
+  perfectly healthy. Diagnosed 2026-09-16 after the desk grew from 13979 to
+  19326 bytes, and reproduced directly against Sonic Pi's own encoder/decoder.
+  `start-46.sh` now refuses to install an oversized desk and warns within 512
+  bytes of the line. **Long-form rationale belongs in this file, not on the
+  desk** — that is what the ceiling is telling you.
+
+- **A dead Sonic Pi also leaves its backend running.** Quitting normally is
+  fine; a session that *dies* is not — the GUI is the part that goes, while
+  tau/beam, `spider-server`, `daemon.rb` and `scsynth` outlive it. The old
+  `pgrep -x sonic-pi` guard only ever saw the GUI, so the next launch started on
+  top of the corpse, with two taus on different port maps and tokens. That was
+  *not* the cause of the silence above — it was found while chasing it — but it
+  is a real hazard, so `start-46.sh` now reaps remnants first. A *running* GUI
+  is still refused rather than killed, because its autosave would take Buffer 0
+  with it. Note `beam.smp` **ignores SIGTERM** and holds its ports, so the reap
+  escalates to `SIGKILL` and verifies rather than assuming TERM was enough.
+
+  To check by hand:
+
+  ```bash
+  pgrep -af '[s]onic-pi|[s]csynth|[s]pider-server|[d]aemon\.rb|[t]au/_build'
+  wc -c sonic-pi-buffer.rb      # must stay under 16320
+  ```
+
+  > Unrelated and harmless: `gui.log` fills with `Failed to connect to shared
+  > audio memory`. That is exactly what `patch_shm_crash` in
+  > `build-sonicpi-46.sh` is built to produce — the system scsynth never creates
+  > that segment, and the patch turns what used to be a `std::terminate` into a
+  > 1 s retry that logs forever. It is not a fault and not the cause of silence.
 - **The desk is not in Sonic Pi**, and `start-46.sh` installs it for you.
   Sonic Pi's workspaces are its own storage — plain text at
   `~/.sonic-pi/store/default/workspace_<n>.spi`, Buffer 0 being `zero` — and it
@@ -263,20 +308,45 @@ The trivial device test, which loads nothing, ran for five minutes on the same
 machine without a single stop. So this is a **load burst**, not DSP load and
 not the watchdog — and unlike §7a's watchdog it is still a live hazard on 4.6.
 
-The work is now spread across three of the four spare seconds. `stagger` is
-computed from the actual number of operations, so the loop still consumes
-**exactly `cycle_dur`** in total — it has to stay in phase with the breath, or
-the set would switch underneath a cycle that is still playing it:
+The work is spread out rather than dumped in one instant, and the loop still
+consumes **exactly `cycle_dur`** in total — it has to stay in phase with the
+breath, or the set would switch underneath a cycle that is still playing it.
+
+What is held constant is **the gap between operations**, not the width of the
+window. The original pairing was 12 operations in a 3.0 s window — one every
+250 ms — and that is the only pace with hours behind it, so `xen_atmos_load_gap`
+keeps it and the *window* grows with the set instead. That matters because
+`xen_atmos_decorr` changes the set size: at 3 there are 14 files to load and 14
+to free, and 28 operations in the old fixed 3.0 s window would be one every
+**107 ms — faster than the burst that stopped the device**.
+
+The set is therefore chosen *before* the sleep, not after: choosing costs no
+time (it is only shuffles), so the count is known in time to size the window.
 
 ```ruby
-n_ops   = upcoming.size + (to_free ? to_free.size : 0)
-stagger = 3.0 / n_ops
+upcoming   = atmos_set.call
+up_files   = upcoming.values.flatten
+free_files = to_free ? to_free.to_h.values.flatten : []
+n_ops      = up_files.size + free_files.size
 
-upcoming.each_value { |f| load_sample f; sleep stagger }
+op_gap  = get(:xen_atmos_load_gap, 0.25)
+window  = [n_ops * op_gap, cycle_dur - 2.0].min
+stagger = window / n_ops
+
+sleep cycle_dur - window - 1.0   # let the current cycle keep sounding
+up_files.each { |f| load_sample f; sleep stagger }
 ...
-to_free.to_h.values.each { |f| sample_free f; sleep stagger } if to_free
-sleep 1.0                    # 3.0 spent staggering + 1.0 = the 4.0 above
+free_files.each { |f| sample_free f; sleep stagger }
+sleep 1.0
 ```
+
+| `xen_atmos_decorr` | files/set | ops | window | gap | sleep first | total |
+|---|---|---|---|---|---|---|
+| 1 | 6 | 12 | 3.0 s | 250 ms | 12.0 s | 16.0 s |
+| 2 | 10 | 20 | 5.0 s | 250 ms | 10.0 s | 16.0 s |
+| 3 | 14 | 28 | 7.0 s | 250 ms | 8.0 s | 16.0 s |
+
+At `decorr 1` this reproduces the old constants exactly.
 
 Frees are staggered for the same reason and stay **after** the loads: the set
 being freed is two cycles old, so nothing is still sounding it.
@@ -766,6 +836,106 @@ energy and does not ring at all (prominence 0.2 dB); MIDI 43 weakens partial 1
 the same way. At 48 all four ring between 9.7 and 13.4 dB, even the exhale
 partials at 392 and 523 Hz where the material is 15–19 dB down.
 
+### The beds' own enhancer — `xen_atmos_enhance`
+
+Expansion is the **only process in the bed chain that makes the texture less
+dense**. It pulls quiet frames further down, so the material's own gaps deepen
+instead of resting on a floor. Everything else measured goes the other way —
+the +10 dB partial fills gaps by 0.75 dB, the `tanh` by another 0.04 — and the
+chain nets +0.18 dB. So the enhancer is split off from the clouds', and the
+beds' side opens further than the shared knob does.
+
+Measured on `inh_b` through `bed_amp → band_eq → tanh`, at threshold 0.2,
+against no expander at all (−5.49 dB of gap depth):
+
+| `xen_atmos_enhance` | `slope_below` | gap depth | gained | RMS cost | ratio |
+|---|---|---|---|---|---|
+| 0.4 (shared default) | 1.2 | −6.10 dB | +0.61 | −0.82 dB | 0.74 |
+| 1.0 | 1.5 | −7.19 dB | +1.70 | −1.98 dB | 0.86 |
+| 2.0 | 2.0 | −8.75 dB | +3.26 | −3.75 dB | 0.87 |
+| 3.0 | 2.5 | −10.58 dB | +5.09 | −5.34 dB | 0.95 |
+
+About **1 dB of level per 1 dB of gap**, and the rate does not fall off — the
+ratio *improves* across the range, so there is no knee to stop at. Stop where
+the level loss stops being affordable.
+
+**The threshold is not the knob.** At 0.4 the gap depths are identical to those
+at 0.2 to within 0.01 dB (−6.10, −7.19, −8.75, −10.59) while the RMS cost
+multiplies by 2.5×: once the threshold clears the material the gain law is a
+pure power law on the envelope, so raising it rescales everything and reshapes
+nothing. Below the material it does the opposite — at 0.05 most frames sit in
+the `slope_above` region, which is 1.0, so even slope 2.5 only reaches −7.97 dB.
+0.2 is already where it wants to be.
+
+The knob goes past +1.0 deliberately, unlike the shared one. Expansion leaves
+`slope_above` at 1.0, so it can only ever pull **down** — it cannot clip outputs
+that bypass the master limiter. The compression side stays clamped at −1.0,
+where `slope_above` is 0.5; past −2.0 it would reach zero and invert.
+
+It pairs with `xen_atmos_decorr`: at 3 each speaker plays a different file, so
+each expander works on its own material and the gaps deepen **independently per
+speaker**. At 1 the three channels are the same signal and expand in lockstep,
+which deepens the gap without opening the texture.
+
+### Decorrelating the beds — `xen_atmos_decorr`
+
+A bed plays on three speakers. Up to now all three read the **same buffer,
+sample-locked**, and three coherent copies of one recording do not sound like
+three sources — they sound like one thick one. They sum into a fixed
+interference field, and every gap in the file is a gap on all three speakers
+at the same instant, so the material's own silences never open the texture up;
+they just move the whole hexagon down together. That is heard as **density**,
+and nothing downstream can undo it.
+
+Measured on `inh_b`, the bed under channels 2, 4 and 6, using the depth of the
+quiet 10% of 20 ms frames relative to the median (more negative = more space):
+
+| | gap depth | vs raw |
+|---|---|---|
+| raw bed | −6.24 dB | — |
+| `band_eq` partial, res 0.94 (shipping) | −5.49 dB | +0.75 |
+| res 0.80 (Q5) | −5.78 dB | +0.46 |
+| res 0.50 (Q2) | −6.01 dB | +0.23 |
+| + `tanh` | −5.45 dB | +0.79 |
+| + expander 1.2 (shipping) | −6.06 dB | **+0.18** |
+
+**The entire FX chain moves density by 0.18 dB.** Across the 108-file `inh_b`
+pool the same measure runs from −14.0 dB at the first quartile to −4.8 dB at
+the third — so *which file* is worth roughly 12 dB and *every knob in the
+chain together* is worth a fifth of one. The coherence and the material sit
+upstream of all of it, which is why this knob exists and why widening the
+resonance does not work.
+
+`xen_atmos_decorr` is how many distinct files a bed draws, one per speaker —
+`1` is the old behaviour exactly, `3` is one per speaker. It uses
+`shuffle.take(n)` rather than `choose` n times, because `choose` can repeat and
+two speakers sharing a file is the coherence being paid for in buffers;
+Sonic Pi's `Array#shuffle` draws from the same seeded RNG as `choose`
+(`core.rb:1084`), so runs stay reproducible. A pool shorter than *n* yields
+fewer files and the speakers share again — the old behaviour, arrived at by
+degrading rather than by crashing.
+
+Two costs, both real:
+
+- **Buffers.** At 3 a set is 14 files rather than 6, and about three sets are
+  live at once (sounding, previous, loading) — roughly 258 MB of atmosphere in
+  scsynth instead of 110. The loader re-paces itself (§4) rather than firing
+  the bigger set at the old rate.
+- **Level — but not the simple loss it looks like.** Three *coherent* copies
+  sum to +9.5 dB where they arrive in phase and cancel where they don't; three
+  *decorrelated* ones sum to +4.8 dB **everywhere**. Averaged over the room the
+  power is the **same** either way — the cross terms average to zero — so this
+  does not turn the bed down. What collapses is the **variance**: hot spots lose
+  up to 4.8 dB, nulls fill in. The beds live in 125–500 Hz — wavelengths of
+  0.7–2.7 m against speakers about a metre apart — so that field is strong and
+  strongly position-dependent, and which way a given seat moves depends on where
+  in it that seat sat. **Don't pre-compensate `xen_atmos_amp`**; walk the room
+  first. The likely result is a bed that is steadier and slightly fuller, not
+  quieter.
+
+The knob is read by the loader when it builds the set, one cycle ahead, so a
+change shows in the log one breath before it is audible.
+
 ## 6. The reloader — `sonic-pi-buffer.rb`
 
 The only workspace that gets edited during a session/installation. It sets
@@ -801,7 +971,12 @@ bleep, seed) via `set`, then contains the reloader loop, which:
 ```ruby
 set :xen_rig_outputs, 4    # 12 = Hala MX, 4 = UMC404HD in the studio
 set :xen_focus, :all       # which phase: :inhale :exhale :m0 :m0_ceil :m0_floor :all
+                           # gates BOTH layers - beds and granular alike
 set :xen_layers, :both     # which material: :both :atmos (beds only) :grains (granular only)
+set :xen_atmos_decorr, 3   # distinct files per bed, one per speaker — 1 = one file on all three
+set :xen_atmos_load_gap, 0.25 # seconds between atmos load/free ops (§4)
+set :xen_atmos_enhance, 0.4   # the BEDS' enhancer, split from the clouds' (§5)
+set :xen_atmos_enhance_threshold, 0.2
 set :xen_density, 1.0      # grain density multiplier (§5)
 set :xen_sched_ahead, 3.0  # lookahead for the breath loop — spikes vs. Stop safety (§4)
 set :xen_atmos_amp, 0.5    # the bed — sits OVER the granular material (rig-compensated)
@@ -831,6 +1006,18 @@ set :xen_seed, 0           # changing this needs Stop + Run
 the inhale clouds alone. Muting a layer never changes the length of a breath —
 the phases hold their time either way, otherwise the 16 s atmosphere files
 would be retriggered every couple of seconds.
+
+`focus` gates **both** layers. The beds are phase material like the clouds
+are: `:inhale` keeps `inh_a`/`inh_b` on hexagon A and drops `exh_a`/`exh_b`,
+`:exhale` does the reverse, and the three M=0 values keep **no bed at all** —
+M=0 is a point in the breath, not a phase of it, so what the atmosphere plays
+there is its `quad_ceil` accent, which follows `:m0_ceil` and is dropped by
+`:m0_floor`. Soloing a phase does not change what that phase sounds like in
+`:all`: the rig compensation `bed_scale` and the beds' partial numbers are
+both computed over the unfiltered four, so a soloed bed keeps its level and
+its pitch. Note that M=0's own quads span both hexagons by design —
+`quad_ceil` is `1, 2, 11, 12` and `quad_floor` is `5, 6, 7, 8` — so under
+`focus: :m0` the exhale-end monitors still carry the scalpel and the funnel.
 
 Run: `./session-scripts/start-46.sh --simulation` (or `--production` in the
 hall), which installs this file into Buffer 0 with the venue's rig and bleep
