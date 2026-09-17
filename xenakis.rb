@@ -1233,7 +1233,22 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                        traj_mode: traj_mode, traj_cycles: traj_cycles,
                        traj_width: traj_width,
                        pitch_from: 1.4, pitch_to: 0.95, pitch_jit: 0.04,
-                       lpf_from: 120,   lpf_to: 75,     lpf_jit: 3,
+                       # lpf_to was 75 - MIDI, so 622 Hz. The 17 Sep capture
+                       # (README 10) measured clarity at four positions and
+                       # NOTHING localises at all of them below 1 kHz: BACK has
+                       # no usable clarity under 700 Hz, FRONT none under 150.
+                       # So the descent used to hand the phase down INTO the
+                       # dead band - the inhale became progressively harder to
+                       # place exactly as it approached M=0, which is backwards
+                       # for the one gesture that is supposed to be travelling.
+                       #
+                       # 88 is 1318 Hz: inside the 1-3 kHz window that works at
+                       # every position, and the same value the exhale opens on
+                       # (lpf_from: 88 below), so the two phases now meet at M=0
+                       # instead of the inhale disappearing under it. Still 2.4
+                       # octaves of darkening from 8372 Hz, so the descent reads
+                       # as a descent; it just stops before it stops localising.
+                       lpf_from: 120,   lpf_to: 88,     lpf_jit: 3,
                        amp_lo: 0.155 * master_amp * grains_amp, amp_hi: 0.31 * master_amp * grains_amp,
                        # down the slope: full height at S1, the speaker plane
                        # by M=0.
@@ -1355,7 +1370,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                        # the "shatter" material loses 10.5 dB through the
                        # filter at 75 (622 Hz) - practically making the
                        # entrance inaudible - versus 0 dB at the inhale's
-                       # entrance, which starts at 120 (8372 Hz). At 88 (1568
+                       # entrance, which starts at 120 (8372 Hz). At 88 (1318
                        # Hz) the loss drops to ~6 dB. Grain fusion is now
                        # handled by the "long only" pools, not by darkening
                        # the filter.

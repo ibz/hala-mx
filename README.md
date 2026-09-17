@@ -1809,6 +1809,81 @@ rm ~/.config/autostart/hala-mx.desktop          # permanently
 or set `X-GNOME-Autostart-enabled=false` in the file to keep it around. GNOME's
 Startup Applications UI lists it as "Hala MX (Xenakis installation)".
 
+## 10. What the 17 September capture changes
+
+Four positions were measured in-situ on 17 September (L, R, FRONT, BACK), against the
+single UMIK-1 sweep of 2 September. The full review is a published page; this section
+records only what it changed in the code.
+
+**The headline is a reversal, not a refinement.** The single-mic session reported
+`D50` 98.6 % and `C80` +20.4 dB and concluded the hall was acoustically dead. At
+listening positions `D50` is **4.1 %** (L), **4.5 %** (R) and **0.1 %** (BACK), with
+`C80` between −11 and −28 dB. The 2 September page had flagged exactly this risk —
+"close miking could be inflating them" — and it was right to.
+
+### 10a. Panning: amplitude cannot place anything
+
+A constant-power `cos/sin` phantom between two speakers is built from the *direct*
+sound's level ratio. At a direct-to-reverberant ratio of 4 % there is no direct field
+to build it in. What still localises is the first arrival, which needs one real source.
+So `xen_pan_mode :discrete` is now required rather than preferred — and it costs
+nothing to adopt, because discrete already puts the same expected power per channel
+(`cos² × intensity²`) as continuous.
+
+### 10b. The inhale ramp ended in a band that does not localise
+
+Clarity is wildly position-dependent, and the four positions barely overlap:
+
+| capture | usable clarity | dead |
+|---|---|---|
+| L | 50 – 800 Hz | everything above 1 kHz |
+| R | 400 Hz – 10 kHz | below 300 Hz |
+| FRONT | 200 Hz – 10 kHz | below 150 Hz |
+| BACK | above 1 kHz only | below 700 Hz |
+
+The intersection is roughly **1–3 kHz**. The inhale cloud ramped
+`lpf_from: 120 → lpf_to: 75` — 8372 Hz down to **622 Hz** — so it handed the phase
+down into the dead band, becoming harder to place exactly as it approached M=0.
+`lpf_to` is now **88 (1318 Hz)**: inside the window, and the same value the exhale
+opens on, so the two phases meet at M=0 instead of the inhale vanishing under it.
+Still 2.4 octaves of darkening, so the descent still reads as a descent.
+
+> **Correction.** MIDI 88 is 1318 Hz, not 1568 as the exhale's own note had it since
+> the initial commit. Both comments now say 1318.
+
+### 10c. Height: keep 8372 Hz, and stop trying to win it back with gain
+
+The vertical axis is a `+9 dB` boost at 8372 Hz and nothing else. The room delivers
+that band 5.4 dB down, and 17 September's drier air (23 % RH against 33 %) adds
+another 1.12 dB at 20 m and 1.67 dB at 30 m — HF absorption *rises* as humidity falls
+at ~30 °C. So roughly 7 dB of a 9 dB cue is gone before it reaches anyone.
+
+**None of the available levers recover it.** Measured through the real chain on the
+M=0 scalpel render, where the cue is the 8 kHz-to-3 kHz contrast at the output:
+
+| change | cue recovered | cost |
+|---|---|---|
+| `blauert_hi_db` +9 → +18 | **+3.07 dB** | none (peak 0.9249 → 0.9250) |
+| drive `hpf amp` 6.0 → 1.0 | **+1.44 dB** | peak 0.925 → 3.728 |
+| move hi EQ after the tanh | **+0.96 dB** | peak 0.361 → 0.995 |
+
+Nine dB of extra EQ buys three. The reason is structural and the same one
+`xen_out_headroom` exists for: **the Blauert EQ sits inside the tanh**, and a
+saturator compresses spectral contrast exactly as it compresses dynamic contrast.
+Every knob that looks like it should help sits upstream of it.
+
+And the frequency must not move. An earlier draft of the review suggested dropping the
+cue toward 5274 Hz, where absorption costs a third as much. **That was wrong.**
+Blauert's "above" band is 7–10 kHz; 2.5–6 kHz is his *front* band, so moving it there
+would pull the image forward rather than up — trading a weak correct cue for a strong
+wrong one.
+
+So: 8372 Hz stays, `blauert_hi_db` stays at 9.0, and the height cue is accepted as
+arriving at roughly half strength. The only thing that would actually restore it is
+compensation applied *after* all saturation — a shelf on the output stage, tuned to
+the room's measured −5.4 dB — which is a rig decision, not a code one, and is not
+implemented here.
+
 ## Layout
 
 ```
