@@ -818,6 +818,18 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # makes M=0 land, and would not uncover one dB of the atmosphere.
   m0_ceil_trim  = get(:xen_m0_ceil_amp, 0.85)   # -15%, about -1.4 dB
   m0_floor_trim = get(:xen_m0_floor_amp, 1.0)   # the funnel, untouched
+  # CONFINING M=0 TO ONE QUAD IS A LEVEL CHANGE, not just a placement one.
+  # Both halves then land on the same four channels and sum there, on outputs
+  # that bypass the master limiter. Measured on the current renders: scalpel
+  # 0.413 + funnel 0.913 + the bed already on 5-8 gives a POWER sum of 1.151,
+  # i.e. clipping before any coincident peak. 1/sqrt(2) on each is the
+  # principled amount - the same constant-power reasoning as bed_scale: two
+  # decorrelated sources on one channel at 1/sqrt(2) carry the total power one
+  # of them carried alone. That puts the power sum at 0.907. Coincident peaks
+  # still reach 1.50, so pull xen_m0_floor_amp down too if it reads as
+  # clipping rather than as weight.
+  m0_confine    = get(:xen_m0_confine, false)
+  m0_pair_scale = m0_confine ? 1.0 / Math.sqrt(2) : 1.0
 
   # THE SLOPE. The score's alpha/beta - see "THE BREATH'S HEIGHT" for why it
   # is 12 and not the 25/30 written on the drawing. Read every breath like
@@ -985,11 +997,20 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   if rig_outputs >= 12
     # Both breath phases are now continuous clouds (see cloud_*); the
     # discrete map only remains for M=0's two quads.
-    quad_ceil   = [1, 2, 11, 12]       # the "upper" scalpel - the two hexagons' far ends
-    quad_floor  = [5, 6, 7, 8]         # the funnel - the middle, where the hexagons meet
+    quad_ceil   = [1, 2, 11, 12]       # the "upper" scalpel
+    quad_floor  = [5, 6, 7, 8]         # the funnel
+    # The atmosphere's M=0 accent keeps the original upper set whatever the
+    # grains do below: it is a bed, not a grain, and xen_m0_confine is about
+    # the GRANULAR layer only.
+    quad_accent = [1, 2, 11, 12]
+    # CONFINE: every M=0 grain onto 5-8 and nothing anywhere else. Costs the
+    # funnel-vs-scalpel separation by construction - both halves land on the
+    # same four speakers and sum there - so it is off by default.
+    quad_ceil = quad_floor.dup if m0_confine
   else
     quad_ceil   = xen_spread rig_outputs, 4
     quad_floor  = xen_spread rig_outputs, 4
+    quad_accent = quad_ceil
   end
 
   play_inhale = [:all, :inhale].include?(focus)
@@ -1165,7 +1186,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
     in_thread do
       sleep atmos_margin + inhale_dur + inhale_pause
       [atm[:m0_up], atm[:m0_pz]].each do |f|
-        quad_ceil.each do |ch|
+        quad_accent.each do |ch|
           in_thread do
             with_fx :sound_out, output: ch, amp: 0 do
               with_fx :tanh, krunch: 0.25 do
@@ -1223,7 +1244,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       quad_ceil.each_with_index do |quad_chan, i|
         in_thread do
           with_fx :sound_out, output: quad_chan, amp: 0 do
-            with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_ceil_trim * grains_amp,
+            with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_ceil_trim * grains_amp * m0_pair_scale,
                             amp_slide: m0_fade do |vol|
               # amp: 6 is makeup gain, placed AFTER the filter - the HPF cuts
               # ~76% of the energy; without it the scalpel would be the
@@ -1275,7 +1296,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       quad_floor.each_with_index do |floor_chan, i|
         in_thread do
         with_fx :sound_out, output: floor_chan, amp: 0 do
-          with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_floor_trim * grains_amp,
+          with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_floor_trim * grains_amp * m0_pair_scale,
                           amp_slide: m0_fade do |vol|
             # The grain amplitudes are already baked into the render, as the
             # ATTACK stage of the distortion (dry peak ~3.1 - that's why the

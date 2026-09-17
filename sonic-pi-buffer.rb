@@ -65,15 +65,15 @@ set :xen_atmos_rotate_period, 41.0 # seconds, and deliberately NOT a divisor
                            # channels and the rotation is only an L-R sway # the atmosphere accent at M=0 - over the bed
 set :xen_m0_ceil_amp, 0.85 # M=0's granular scalpel, trimmed -15% so the atmosphere
                            # accent - same speakers, same 8 kHz band - can be heard
+set :xen_m0_confine, true  # EVERY M=0 grain on 5-8, nothing elsewhere. Costs the
+                           # funnel-vs-scalpel separation; applies 1/sqrt(2) to
+                           # each half automatically or it clips. README 8e.
 set :xen_m0_fade, 2.5      # seconds for M=0 to ramp to silence, on the tanh amp
                            # - the only fade the room hears. Was 5.0, which kept
                            # M=0 under 37% of the exhale. README 8d.
-set :xen_m0_floor_amp, 2.0 # M=0's funnel, +6.0 dB. LPF'd at 466 Hz on 5-8, where
-                           # the bed also lives, so the xen_atmos_amp raise buried
-                           # it by 10.8 dB while the scalpel at 3-8 kHz was
-                           # untouched. This wins back 6.0 of that; the product
-                           # trim x xen_grains_amp must stay under 1.66 or the
-                           # burst clips (no limiter on these outs). README 8b.
+set :xen_m0_floor_amp, 2.0 # M=0's funnel, +6.0 dB - wins back 6 of the 10.8 dB the
+                           # xen_atmos_amp raise cost it. trim x xen_grains_amp
+                           # must stay under 1.66 or it clips. README 8b.
 set :xen_atmos_spectral, 10.0 # depth in dB of the beds' resonant partials
                            # turns the four broadband beds into four partials of
                            # one spectrum: noise in, pitch out.

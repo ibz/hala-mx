@@ -1592,6 +1592,45 @@ different draws, but the saturators absorb it: the floor's tanh output went
 0.8597 → 0.8693, +0.1 dB, so `xen_m0_floor_amp 2.0` still peaks 0.913 and the
 level decisions in 8b stand unchanged.
 
+### 8e. Confining M=0 to one quad — `xen_m0_confine`
+
+M=0 normally splits across two disjoint sets: the scalpel on `quad_ceil`
+(1, 2, 11, 12) and the funnel on `quad_floor` (5, 6, 7, 8). `xen_m0_confine`
+puts **every M=0 grain on 5-8 and nothing anywhere else** — `quad_ceil` is
+simply pointed at `quad_floor`.
+
+The atmosphere's M=0 accent (`m0_up`, `m0_pz`) does *not* move. It follows a
+separate `quad_accent`, fixed at 1, 2, 11, 12, because it is a bed and this
+knob is about the granular layer.
+
+**It is a level change, not just a placement one.** Both halves then land on
+the same four channels and sum there, on outputs that bypass the master
+limiter:
+
+| | ch 1,2,11,12 | ch 5,6,7,8 | ch 9,10 |
+|---|---|---|---|
+| confine off | scalpel 0.413 + bed | funnel 0.913 + bed → **power 1.074** | bed only |
+| confine on | bed + accent only | scalpel 0.292 + funnel 0.645 + bed → power **0.907** | bed only |
+
+Without compensation the confined sum is a **power** of 1.151 — clipping before
+any coincident peak. So each half is scaled by `1/sqrt(2)` automatically. That
+is the same constant-power reasoning as `bed_scale`: two decorrelated sources
+on one channel at `1/sqrt(2)` carry the total power one of them carried alone.
+Coincident peaks still reach 1.50, so pull `xen_m0_floor_amp` down as well if
+it reads as clipping rather than as weight.
+
+**Note the confine-off row.** Channels 5 and 6 already sit at a power sum of
+1.074 with the funnel at 2.0 against an inhale bed at `xen_atmos_inhale_amp`
+1.41. Those two were sized separately — the bed against the inhale *clouds*
+(8c), the funnel against the bed at M=0 (8b) — and at M=0 they coincide on the
+same two channels. Confining is the one configuration that improves it, by
+spreading the same energy over a `1/sqrt(2)` trim.
+
+What it costs, by construction, is the funnel-vs-scalpel separation: the
+sub-466 Hz weight at the feet and the 3-8 kHz scalpel arrive from the same
+four cabinets, so M=0 stops being two gestures in two places and becomes one
+event in one. That is the trade, taken deliberately.
+
 ## Layout
 
 ```
