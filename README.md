@@ -1679,6 +1679,60 @@ sum-of-peaks after the trim, so ~0.88 true — but that one is an estimate, not
 a measurement: the clouds are synthesised at runtime from the grain pools and
 cannot be measured statically the way the rendered beds and bursts can.
 
+### 8g. The M=0 onset — `ONSET_GRAINS`
+
+The burst did not hit. Measured on the render as it stood, per channel, after
+the full chain:
+
+```
+first sound at    60+ ms   (digital silence before that)
+90 % of peak at  ~100 ms
+```
+
+The cause is the channel draw. `random.randrange(4)` sends each grain to one
+speaker, so any single channel's first grain arrives at a mean `4/lam` — 33 ms
+on the floor, with a long tail on that distribution. An impact that fades up
+over 100 ms is not an impact.
+
+**Gain could not fix it.** Both M=0 chains saturate, and the crest factor shows
+how completely:
+
+| stage | peak | rms | crest |
+|---|---|---|---|
+| dry render | 1.835 | 0.448 | **12.2 dB** |
+| + lpf 466 | 1.522 | 0.375 | 12.2 dB |
+| + distortion 0.8 | 1.352 | 0.888 | **3.6 dB** |
+| + tanh | 0.864 | 0.675 | **2.1 dB** |
+
+The `distortion` at `distort: 0.8` limits at ±1.125 and takes 12.2 dB of crest
+down to 3.6; the tanh takes it to 2.1. The burst is a flat wall at the ceiling
+whatever you feed it, so more level buys nothing. What was missing was an
+**edge**, not amplitude.
+
+So each channel now gets `ONSET_GRAINS` placed deterministically at `t = 0`, at
+the top of the layer's amplitude range with the attack forced to `ONSET_ATK`
+(0.5 ms) — every speaker fires on the downbeat instead of waiting for the dice.
+Measured across 16 channel-variants afterwards: **first sound at 0 ms, 90 % of
+peak at 0 ms.** The saturation flattens their level along with everything
+else, which is fine — what survives saturation is the rise time, and that is
+what reads as mass.
+
+Set `ONSET_GRAINS = 0` to restore the old soft onset.
+
+**Headroom cost.** Dry peaks rose (floor 3.37 → 4.02, ceil 0.95 → 1.01) and the
+summed peak on channels 5-6 went with them. At the current desk values
+(`xen_m0_ceil_amp` 1.4, `xen_m0_floor_amp` 2.5):
+
+```
+xen_out_headroom 0.75 -> 1.341   clips
+xen_out_headroom 0.60 -> 1.072   clips
+xen_out_headroom 0.55 -> 0.983   ok
+```
+
+Worth knowing before reaching for the trim: the onset's value is rise time, not
+level, and rise time survives a level cut intact. Backing the M=0 pair down
+costs less of the impact than it looks like it should.
+
 ## Layout
 
 ```

@@ -63,6 +63,23 @@ FADE_FROM = M0_DUR + M0_TAIL * 0.5
 # `control` on the tanh's amp, AFTER saturation. Here we leave only a slight
 # decrease, so the late grains are both rarer and softer.
 K_AMP   = 0.5
+
+# THE ONSET. Measured on the render as it stood: the first 60 ms of a channel
+# were digitally SILENT and it took ~100 ms to reach 90 % of peak. The cause is
+# the channel draw - `random.randrange(4)` sends each grain to one speaker, so
+# any single channel's first grain arrives at a mean 4/lam (33 ms on the floor,
+# and the tail of that distribution is long). An impact that fades up over
+# 100 ms is not an impact, and no amount of gain fixes it: both chains saturate,
+# so the burst is a flat wall at the ceiling either way. What was missing was an
+# EDGE, not level.
+#
+# So each channel gets ONSET_GRAINS placed deterministically at t = 0, at the
+# top of the layer's amplitude range and with the attack forced to ONSET_ATK -
+# every speaker fires on the downbeat instead of waiting for the dice. The
+# saturation flattens their level with everything else, which is fine: what
+# survives saturation is the RISE TIME, and that is what reads as mass.
+ONSET_GRAINS = 5       # per channel, placed at t=0; 0 restores the old soft onset
+ONSET_ATK    = 0.0005  # 0.5 ms - a real edge, still long enough not to click
 NVAR   = 8             # how many variants, so M=0 isn't identical every breath
 POOL   = 256           # how many distinct files enter the selection
 
@@ -160,6 +177,19 @@ def main():
             chans = [[0.0] * nframes for _ in range(4)]
             t, n = 0.0, 0
             span = M0_DUR + M0_TAIL
+
+            # The onset, before the stochastic rain starts - see ONSET_GRAINS.
+            for c in range(4):
+                for _ in range(ONSET_GRAINS):
+                    g = grain(random.choice(pool),
+                              random.uniform(*cfg["rate"]),
+                              cfg["amp"][1],            # top of the range, not a draw
+                              ONSET_ATK, cfg["rel"])
+                    buf = chans[c]
+                    for k, s in enumerate(g):
+                        if k < nframes:
+                            buf[k] += s
+                    n += 1
             while True:
                 # Non-homogeneous Poisson process: density decays
                 # exponentially in the tail. Generated at the max rate and
