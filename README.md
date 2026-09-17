@@ -1733,6 +1733,82 @@ Worth knowing before reaching for the trim: the onset's value is rise time, not
 level, and rise time survives a level cut intact. Backing the M=0 pair down
 costs less of the impact than it looks like it should.
 
+## 9. Autostart on login
+
+The session comes up by itself on graphical login, via XDG autostart. Install
+it with:
+
+```sh
+mkdir -p ~/.config/autostart
+cat > ~/.config/autostart/hala-mx.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Hala MX (Xenakis installation)
+Comment=Launch Sonic Pi 4.6 routed for the hall on graphical login
+Exec=/home/mx/src/hala-mx/session-scripts/autostart.sh --production
+Icon=audio-card
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
+EOF
+desktop-file-validate ~/.config/autostart/hala-mx.desktop   # silence = valid
+```
+
+`Exec` needs an absolute path — autostart entries are not run from the repo,
+and `~` is not expanded in a `.desktop` `Exec` line.
+
+**Why XDG autostart and not a systemd user unit.** `start-46.sh` ends by
+`exec`-ing the Sonic Pi *GUI*, a Qt application, so it needs a graphical
+session — `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and the session bus. XDG
+autostart runs inside that session and inherits all of it. A user unit would
+have to import the environment by hand and order itself against
+`graphical-session.target` for no benefit. (Lingering is also off for this
+user, so a unit would not start at boot without a login anyway.)
+
+### Why there is a wrapper
+
+`session-scripts/autostart.sh` is a porch, not a replacement. Two things must
+be true before `start-46.sh` can work, and neither is guaranteed at the moment
+the desktop hands over:
+
+1. **PipeWire has to be up for this user.** It is a user service starting at
+   roughly the same moment, so a cold login can easily win the race.
+2. **The Focusrite has to have enumerated.** USB audio takes a few seconds, and
+   `--production` *aborts* rather than starting under-routed — correct
+   behaviour, but it needs to be given the chance.
+
+So the wrapper polls for the Focusrite sink for up to 60 s, then hands over. If
+it never appears it runs `start-46.sh` anyway, because that script's own error
+message is better than anything the wrapper could invent. The 5 s
+`X-GNOME-Autostart-Delay` takes the edge off the same race before the poll even
+starts.
+
+A desktop session has nowhere to print, so everything goes to
+**`~/.sonic-pi/autostart.log`**, with the previous run kept at `.log.1`. That
+path is deliberately *not* under `~/.sonic-pi/log/`, which Sonic Pi rotates
+into `history/` on every boot — it would take the file with it.
+
+### Two things it does not do
+
+**It does not press Run.** `start-46.sh` launches the GUI with the desk
+installed and the routing patched; the piece still has to be started by hand.
+
+**It reinstalls Buffer 0 from `sonic-pi-buffer.rb` on every login.** That is
+`start-46.sh`'s normal behaviour and usually what you want — but it means any
+tuning done in the GUI and not yet synced back to the repo is overwritten at
+the next login. The outgoing buffer is backed up under
+`~/.sonic-pi/workspace-backups/`, and `--keep` in the `Exec` line skips the
+install entirely if you would rather the desk survive a reboot untouched.
+
+### Disabling it
+
+```sh
+rm ~/.config/autostart/hala-mx.desktop          # permanently
+```
+
+or set `X-GNOME-Autostart-enabled=false` in the file to keep it around. GNOME's
+Startup Applications UI lists it as "Hala MX (Xenakis installation)".
+
 ## Layout
 
 ```
