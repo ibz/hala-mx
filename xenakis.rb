@@ -482,6 +482,50 @@ exhale_amp_lo    = 0.138  # the exhale's QUIETEST grain - where the spill starts
 # on the other side of M=0.
 spill_into = 1.0
 
+# 0b-ter. THE VACUUM - a travelling hole in the atmosphere, 5-6 -> 9-10
+#
+# The piece has exactly one physical event and it is an ADDITION: M=0, an
+# implosion that saturates every chain it touches (12.2 dB of crest flattened
+# to 2.1). This is its inverse, and it is made of subtraction - which is also
+# the only kind of gesture this room can carry across that distance. The 17
+# September capture measured D50 at 4.1 / 4.5 / 0.1 % (README 10a): there is
+# no direct field to build a phantom in, so a travelling SOURCE will not read
+# as travelling. A travelling ABSENCE does not need to localise. The beds are
+# continuous and diffuse; when a piece of one leaves and reappears displaced,
+# the ear registers the change even when it cannot point at it.
+#
+# THE PATH, off the floor plan (monitors.tsv, cm, projected onto the line
+# joining the centroid of 5-6 to the centroid of 9-10):
+#
+#     ch 5  (400,152)    0.0 m    f 0.000
+#     ch 6  (487,200)    0.3 m    f 0.042
+#     ch 10 (313,700)    5.4 m    f 0.850
+#     ch 9  (313,800)    6.5 m    f 1.000
+#
+# 6.51 m end to end, crossed in vac_cross seconds - 3.3 m/s at the default
+# 2.0, which is the same 2-3 m/s of real air movement the capture found
+# phase-modulating 8 kHz in this hall. It is also the ONE path that goes
+# THROUGH the audience rather than round it: hexagon A ends at Y 348 and B
+# starts at Y 652, so the middle 3 m of the crossing has no speaker in it at
+# all, and people stand in that gap. Nothing can glide across it - the hole
+# leaves A and arrives in B - which is the other reason the gesture is a
+# removal.
+#
+# 5-6 is also where the piece already melts the floor: quad_floor is
+# [5, 6, 7, 8], M=0's funnel. The vacuum opens on the funnel's own corner.
+vac_path  = [[5, 0.000], [6, 0.042], [10, 0.850], [9, 1.000]]
+vac_cross = 2.0        # s to cross the 6.51 m -> 3.3 m/s
+vac_in    = 0.35       # the hole opening: fast, or it is a swell, not a suck
+vac_hold  = 0.25       # how long it stays open
+# Closing is slower than opening - refilling, not a gate letting go - and the
+# length is DERIVED rather than chosen: it is exactly long enough that the near
+# pair is still coming back when the far pair opens, so the hole is never
+# nowhere. Any faster and the gesture reads as two ducks instead of one thing
+# crossing. The floor is for a vac_cross short enough to make this negative.
+vac_out   = [vac_cross * (vac_path[2][1] - vac_path[0][1]) - vac_in - vac_hold, 0.4].max
+vac_db    = -12.0      # how deep the hole is at xen_vacuum 1.0
+vac_semis = -5.0       # and how far the material is dragged down with it
+
 # 0b. RE-SCALING A GESTURE OVER A SMALLER RIG
 # count positions distributed over n outputs, wrapping in a circle, so every
 # gesture can be heard alone across all the speakers - not crammed into one
@@ -1201,6 +1245,22 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # :scatter again, only phase-locked).
   traj_width  = get(:xen_traj_width, 0.12)
 
+  # THE VACUUM (0b-ter) - how hard the travelling hole is dug, 0.0 = off.
+  # One knob for all three cues, so they cannot drift apart: the duck, the
+  # drop and the below-tilt are all scaled by it.
+  vac_amt = get(:xen_vacuum, 0.0)
+  # The path folds like every other gesture on a smaller rig. At 12 it is the
+  # floor plan's own 5 -> 6 -> 10 -> 9; below that xen_spread distributes four
+  # positions round whatever is there, so the studio keeps the RELATIONSHIP -
+  # a hole crossing from one pair to another - and loses only the geometry.
+  # (The beds' own fold is modular AND deduped, so the absolute channels 5-10
+  # simply do not exist under 12 outputs; matching on them would make this a
+  # silent no-op in the studio, which is the worst of the three outcomes.)
+  vac_chans = rig_outputs >= 12 ? vac_path.map(&:first) : xen_spread(rig_outputs, 4)
+  vac_when  = vac_chans.zip(vac_path.map(&:last)).to_h
+  # Linear gain for the duck. dB because a hole is heard in dB.
+  vac_gain  = 10.0 ** (vac_db * vac_amt / 20.0)
+
   # THE SPILL - how many of the exhale's grains are carried over the cycle
   # boundary to cover the seam, and to fill whatever void xen_void leaves
   # before them. 0 is a bare turn. Live, unlike the void itself: what the
@@ -1373,11 +1433,62 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
               sleep rot_step
             end
           end
+          # THE VACUUM (0b-ter), for the four channels on its path. Three
+          # cues, all of them CONTROL messages on nodes that already exist,
+          # so the whole gesture costs no voices at all:
+          #
+          #   1. the duck  - the tanh's own amp, which is post-saturation and
+          #      linear (README 8f). Not the sample's amp: the rotation
+          #      writes that one every rot_step and the two would fight.
+          #   2. the drop  - pitch_slide on the bed. Free because bed_overlap
+          #      put PitchShift permanently in circuit (README 8a): the
+          #      shifter is already there, and sliding it costs a message.
+          #      RELATIVE to bed_semis, which is EXACTLY the pitch the bed
+          #      is already holding: pitch_stretch resolves to
+          #      `pitch -= ratio_to_pitch(bed_len / bed_dur)` at trigger time
+          #      (sound.rb:3745), which is the same +12.5 semitones at the
+          #      32 s cycle. Writing an absolute pitch here would throw the
+          #      compensation away and drop the bed an octave. It is exact
+          #      only because every atmos slice is the same length - all 434
+          #      of them are 16.000 s, atmos_slice.py cutting each family at
+          #      the same SLICE_S - so one bed_len describes every bed.
+          #   3. the tilt  - Blauert's pair INVERTED: -9 dB at 8372 Hz and
+          #      +6 dB at 3136 Hz is the "above" chord read backwards, i.e.
+          #      behind and below. This is the only place in the piece that
+          #      voices anything under the speaker plane - breath_tilt
+          #      deliberately clamps at it, and the comment there calls going
+          #      below "the -25 deg mistake coming back". The exception is
+          #      deliberate: the vacuum is not the breath's path, it is what
+          #      the breath is being pulled into.
+          #
+          # It runs in its own thread so it does not race the rotation for
+          # the bed thread's time. with_fx joins the threads its block
+          # spawned before tearing the chain down (sound.rb:1818), so the
+          # nodes are guaranteed to outlive the gesture.
+          on_path = vac_amt > 0.001 && vac_when.key?(ch)
+          vacuum = lambda do |bed, tanh_fx, eq_hi, eq_lo|
+            in_thread do
+              # The spill has to have landed first - this is the gesture that
+              # answers it, not one that interrupts it.
+              sleep lead + spill_into + vac_when[ch] * vac_cross
+              control tanh_fx, amp: out_trim * vac_gain, amp_slide: vac_in
+              control bed, pitch: bed_semis + vac_semis * vac_amt, pitch_slide: vac_in
+              control eq_hi, db: -blauert_hi_db * vac_amt, db_slide: vac_in
+              control eq_lo, db: -blauert_lo_db * vac_amt, db_slide: vac_in
+              sleep vac_in + vac_hold
+              control tanh_fx, amp: out_trim,  amp_slide: vac_out
+              control bed, pitch: bed_semis,   pitch_slide: vac_out
+              control eq_hi, db: 0,            db_slide: vac_out
+              control eq_lo, db: 0,            db_slide: vac_out
+              sleep vac_out
+            end
+          end
+
           with_fx :sound_out, output: ch, amp: 0 do
             with_fx :compressor, threshold: enh_thr, slope_below: enh_below,
                                 slope_above: enh_above, clamp_time: 0.01,
                                 relax_time: 0.25 do
-              with_fx :tanh, krunch: 0.25, amp: out_trim do
+              with_fx :tanh, krunch: 0.25, amp: out_trim do |tanh_fx|
                 # Inside the tanh, like every other boost in the piece: the
                 # resonance is part of what the ceiling has to catch. A
                 # Q ~17 peak only lifts a sliver of the band, so the
@@ -1400,18 +1511,40 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                 # plus silence - see bed_dur / bed_stretch. It no longer
                 # resolves to rate 1.0 / pitch 0 at any cycle length: the
                 # overlap makes the shortest stretch 1.06 (see bed_overlap).
-                if spec_db.abs < 0.01
+                #
+                # Lambdas rather than four nested branches: the bed is now
+                # wrapped by two independent optional pairs (the spectral
+                # partial, the vacuum's band pair), and spelling out every
+                # combination would be four copies of the same `sample`.
+                play_bed = lambda do |eq_hi, eq_lo|
                   bed = sample f, pitch_stretch: bed_dur,
                                   amp: bed_amp, amp_slide: slide,
                                   attack: atmos_margin, release: atmos_margin
+                  vacuum.call(bed, tanh_fx, eq_hi, eq_lo) if on_path
                   rotate.call(bed) if rot_on
-                else
-                  with_fx :band_eq, freq: bed_note, res: spec_res, db: spec_db do
-                    bed = sample f, pitch_stretch: bed_dur,
-                                    amp: bed_amp, amp_slide: slide,
-                                    attack: atmos_margin, release: atmos_margin
-                    rotate.call(bed) if rot_on
+                end
+                spectral = lambda do |eq_hi, eq_lo|
+                  if spec_db.abs < 0.01
+                    play_bed.call(eq_hi, eq_lo)
+                  else
+                    with_fx :band_eq, freq: bed_note, res: spec_res, db: spec_db do
+                      play_bed.call(eq_hi, eq_lo)
+                    end
                   end
+                end
+                # The vacuum's pair is instantiated FLAT and slid later, which
+                # is the one place the piece cannot use its usual "skip at
+                # 0 dB" rule - there is nothing to skip to when the value
+                # arrives two seconds after the node does. It costs two nodes
+                # on four channels, and only while xen_vacuum is up.
+                if on_path
+                  with_fx :band_eq, freq: blauert_hi_note, res: blauert_res, db: 0 do |eq_hi|
+                    with_fx :band_eq, freq: blauert_lo_note, res: blauert_res, db: 0 do |eq_lo|
+                      spectral.call(eq_hi, eq_lo)
+                    end
+                  end
+                else
+                  spectral.call(nil, nil)
                 end
               end
             end

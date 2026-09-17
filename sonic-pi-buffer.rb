@@ -152,6 +152,7 @@ set :xen_void, 0.0         # granular silence between the exhale's last grain an
                            # the inhale's first, split either side of the cycle
                            # boundary. 0 = the phases touch. 2.0 = how it was.
                            # Needs Stop + Run. README 8h.
+set :xen_vacuum, 0.8       # the travelling hole, 5-6 -> 9-10. 0 = off. README 8i.
 set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
                            # on beds + clouds; all of M=0 stays at unity
 set :xen_enhance_threshold, 0.2 # where the 118 decides a signal is "quiet"

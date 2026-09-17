@@ -1914,6 +1914,142 @@ without putting an audible pause back.
 > whether a breath with no pause in it still reads as breathing is a question
 > for the room. `xen_void` is the way back: 2.0 is exactly how it was.
 
+### 8i. The vacuum — a travelling hole, 5-6 → 9-10 (`xen_vacuum`)
+
+The piece had exactly one physical event and it was an **addition**: M=0, an
+implosion that saturates every chain it touches (12.2 dB of crest flattened to
+2.1, §8g). This is its inverse, and it is made of **subtraction**.
+
+That is not only a compositional choice, it is what the room allows. §10a
+measured `D50` at 4.1 / 4.5 / 0.1 % — there is no direct field to build a
+phantom in, so a travelling *source* will not read as travelling. **A
+travelling absence doesn't need to localise.** The beds are continuous and
+diffuse; when a piece of one leaves and reappears displaced, the ear registers
+the change even where it can't point at it.
+
+#### The path
+
+Off the floor plan (`monitors.tsv`, projected onto the line joining the
+centroid of 5-6 to the centroid of 9-10):
+
+| ch | position | along the path | opens at |
+|---|---|---|---|
+| 5 | (400, 152) | 0.00 m | +1.00 s |
+| 6 | (487, 200) | 0.28 m | +1.08 s |
+| 10 | (313, 700) | 5.40 m | +2.70 s |
+| 9 | (313, 800) | 6.51 m | +3.00 s |
+
+6.51 m end to end, crossed in `vac_cross` (2.0 s) — **3.3 m/s**, the same 2–3
+m/s of real air movement the capture found phase-modulating 8 kHz in this hall.
+Times are from the cycle boundary; the gesture starts at `lead + spill_into`,
+i.e. the instant the spill's last grain lands (§8h), and is over by +4.4 s of a
+14.575 s inhale.
+
+It is also **the one path that goes through the audience rather than round
+it**. Hexagon A ends at Y=348 and B starts at Y=652, so the middle 3 m of the
+crossing has no speaker in it at all and people stand in that gap. Nothing can
+glide across it — the hole leaves A and arrives in B — which is the other
+reason the gesture is a removal rather than a source.
+
+`5-6` is also where the piece already melts the floor: `quad_floor` is
+`[5, 6, 7, 8]`, M=0's funnel. The vacuum opens on the funnel's own corner.
+
+#### Three cues, no voices
+
+Every one of them is a `control` message on a node that already exists:
+
+1. **The duck** — the `tanh`'s own `amp`, which is post-saturation and linear
+   (§8f), down `vac_db` (−12 dB at `xen_vacuum` 1.0). Not the sample's `amp`:
+   the bed rotation writes that one every `rot_step` and the two would fight.
+   M=0's fade already uses a `tanh` amp the same way.
+2. **The drop** — `pitch_slide` on the bed, `vac_semis` (−5 at 1.0). **Free
+   because of the bed overlap** (§8a): `bed_dur ≠ cycle_dur` put `PitchShift`
+   permanently in circuit, so the shifter is already there and sliding it costs
+   a message. It is applied *relative* to `bed_semis`, which is exactly the
+   pitch the bed is holding — `pitch_stretch` resolves to
+   `pitch -= ratio_to_pitch(bed_len / bed_dur)` at trigger time
+   (`sound.rb:3745`), +12.53 semitones at the 32 s cycle. Writing an absolute
+   pitch would throw the compensation away and drop the bed an octave. It is
+   exact only because every atmos slice is the same length — all 434 are
+   16.000 s.
+3. **The tilt** — Blauert's pair **inverted**: −9 dB at 8372 Hz and +6 dB at
+   3136 Hz is the "above" chord read backwards, i.e. behind and below.
+
+The only cost is cue 3: two `band_eq` nodes on four channels, instantiated flat
+and slid later. This is the one place the piece can't use its "skip at 0 dB"
+rule — there's nothing to skip to when the value arrives two seconds after the
+node does — and they exist only while `xen_vacuum` is up.
+
+**This is the only place in the piece that voices anything under the speaker
+plane.** `breath_tilt` deliberately clamps at it, and the comment there calls
+going below "the −25 deg mistake coming back". The exception is deliberate: the
+vacuum is not the breath's path, it's what the breath is being pulled into.
+
+#### The shape
+
+```
+ ch 5-6    ___          in 0.35 / hold 0.25 / out 1.10
+              \___..---
+ ch 9-10          ___
+                     \___..---
+           ^1.0s  ^1.6   ^2.7      the near pair is still refilling
+                                   when the far pair opens
+```
+
+`vac_out` is **derived, not chosen**: `vac_cross × (f₁₀ − f₅) − vac_in −
+vac_hold` = 1.10 s, exactly long enough that the near pair is still coming back
+when the far pair opens, so the hole is never *nowhere*. Any faster and the
+gesture reads as two ducks rather than one thing crossing. Change `vac_cross`
+and the overlap stays correct.
+
+The 1.1 s while the hole is between the hexagons is not a mistake — it is the
+3 m of floor with no speaker on it, and a hole of finite width takes that long
+to cross it at 3.3 m/s.
+
+#### What it needs, and what it isn't
+
+- **It is made of the atmosphere.** With `xen_layers :grains` there are no bed
+  nodes and therefore no vacuum. Nothing is silently skipped anywhere else —
+  this is the one dependency.
+- **It wants the 12-output rig.** Below that, `xen_spread` distributes four
+  positions round whatever is there, so the studio keeps the *relationship* — a
+  hole crossing from one pair to another — and loses the geometry. Matching on
+  the absolute channels would have been worse: the beds' own fold is modular
+  *and* deduped, so channels 5-10 simply don't exist under 12 outputs and the
+  gesture would have been a silent no-op in the studio.
+- **It runs in its own thread** so it doesn't race the rotation for the bed
+  thread's time. `with_fx` joins the threads its block spawned before tearing
+  the chain down (`sound.rb:1818`), so the nodes are guaranteed to outlive it.
+- **It is not a body-felt vacuum, and cannot be with this rig.** Felt pressure
+  is a sub-60 Hz phenomenon. 81.5 % of the beds' energy is in 125–500 Hz and
+  the partials ring at 131 / 262 / 393 / 524 Hz — there is nothing down there
+  to push — and there is no sub in the hall. What this does is psychoacoustic,
+  which is what the whole vertical axis of this piece already is ("there is NO
+  speaker overhead… verticality is ENTIRELY psychoacoustic").
+
+#### Tuning it, and the one thing to watch
+
+`xen_vacuum` scales all three cues together, so they can't drift apart: 0.8 on
+the desk, 0 to disable. If it needs to be deeper, `vac_db` before `vac_semis` —
+level reads as absence, pitch reads as effort. If it reads as a swell rather
+than a suck, `vac_in` is too slow.
+
+**Don't let it grow.** The choreography's suction already exists: `inhale_pause`
+— 1.165 s of silence before the burst — is commented as exactly that, "the
+'suction' called for in the choreography". Two suctions per breath is either an
+escalating pair or one too many, and this one should stay the **smaller** of
+the two so the pre-M=0 intake still lands as the real one. There is also an
+irony worth keeping in view: §8h spent two rounds removing a hole at the cycle
+boundary, and this puts one back — four channels of twelve, moving, deliberate.
+Deep enough to read as a gust, not deep enough to read as the piece dropping
+out again.
+
+> **Honest note.** Verified by arithmetic and by exercising the real lambda
+> under a shim: the four channels open at 1.000 / 1.084 / 2.700 / 3.000 s, amp
+> and pitch and both bands all return to rest, and the pitch stays inside
+> Sonic Pi's [−72, +24] validation. Nothing has been heard in the hall, and
+> every number above is a starting point, not a measurement.
+
 ## 9. Autostart on login
 
 The session comes up by itself on graphical login, via XDG autostart. Install
