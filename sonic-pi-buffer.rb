@@ -108,7 +108,7 @@ set :xen_blauert, 0.75     # how strongly the slope is voiced
                            # band ratio 4-6 dB, well inside Blauert's range.
                            # Raise to 1.0 if the exhale can afford it - that
                            # restores tilt 1.0 == M=0's chord exactly
-set :xen_pan_mode, :continuous # :continuous | :discrete
+set :xen_pan_mode, :discrete # :continuous | :discrete
                            # how a grain is placed. :continuous splits it
                            # across the two channels either side of its
                            # position (a phantom image gliding between
