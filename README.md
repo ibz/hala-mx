@@ -1528,6 +1528,70 @@ Getting more than +1.5 dB means giving something back: `xen_grains_amp` down
 1.0. The inhale channels were already at 0.92 before this knob existed; it
 does not create the headroom problem, it just spends what was left.
 
+### 8d. M=0's tail — stretch, thinning, and the handover to the exhale
+
+The last half of M=0 now *dissolves* rather than just getting quieter: each
+grain is played slower so it lasts longer, the rain thins in exact proportion,
+and the whole cloud fades out as the exhale arrives.
+
+**It cannot be done in Sonic Pi.** `rate` is an `:ir` parameter in the player
+synthdef (`samplers.clj:47`) — fixed when the synth starts, not modulatable —
+so a playing sample cannot be slowed down. M=0 is a pre-rendered burst anyway
+(`render_m0.py`, because ~320 grain events/second killed the scheduler), so
+the stretch belongs in the render, where the grains still exist individually.
+
+In the tail, with `u` the tail's progress 0→1:
+
+```
+stretch  s(u) = STRETCH_END ** u          exponential: stretch is a ratio,
+                                          so equal steps are equal musical steps
+rate          = drawn_rate / s(u)         lower rate, longer grain
+density       = lam * exp(-K_DENS*dt) / s(u)
+```
+
+**The 1/s on the density is the whole point, not decoration.** Grains `s` times
+longer arriving `s` times more rarely occupy the same total sounding time, so
+the texture keeps its continuity while the events inside it become long and
+slow. Without it, `s` times longer at the same rate is `s` times the overlap,
+and the tail turns to mush.
+
+At `STRETCH_END = 4.0`, measured on the floor layer:
+
+| t | stretch | grain length | density |
+|---|---|---|---|
+| 0.45 s | 1.00x | 188 ms | 1.000 |
+| 1.10 s | 1.41x | 266 ms | 0.324 |
+| 1.75 s | 2.00x | 376 ms | 0.105 |
+| 3.05 s | 4.00x | 753 ms | 0.011 |
+
+`RENDER` is now **derived**, not the old fixed 3.60 s: the slowest grain is the
+longest source played at the lowest rate the stretch produces, and it can start
+as late as `span`. It comes out at 4.75 s. Guessing it truncates exactly the
+grains the gesture is about, silently — the mixdown just stops writing past the
+end of the buffer.
+
+**The audible fade is `xen_m0_fade`, not the render.** Both M=0 chains saturate
+(distortion, or hpf × 6, then tanh), and a saturator flattens any level change
+upstream of it — so the cosine taper in `render_m0.py` keeps the rendered
+material honest but is mostly eaten. The fade the room hears is the `control`
+on the tanh's `amp`, after saturation. It was a flat 5.0 s, chosen when the
+overlap was wanted ("a cross-fade, not a cut"); at a 32 s cycle that is 37 % of
+the 13.575 s exhale spent with M=0 still underneath. 2.5 s lets the stretched
+tail dissolve and then gets out of the way. It does not affect cycle timing —
+both halves ramp inside `in_thread`.
+
+**Two bugs fixed in passing.** `LAYERS["ceil"]["sub"]` was `inhale/high`; the
+folder is `inspir/high`, so `pool_for()` returned nothing and the script
+exited on "no files for layer ceil" — it could not have run at all as it
+stood. And `random.seed(hash((layer, v)))` was not reproducible: string
+hashing is salted per process unless `PYTHONHASHSEED` is set, so every run
+produced different variants. Now `zlib.crc32`, so a render is repeatable.
+
+Dry peaks rose (ceil 0.68 → 0.95, floor 2.68 → 3.37) because the variants are
+different draws, but the saturators absorb it: the floor's tanh output went
+0.8597 → 0.8693, +0.1 dB, so `xen_m0_floor_amp 2.0` still peaks 0.913 and the
+level decisions in 8b stand unchanged.
+
 ## Layout
 
 ```

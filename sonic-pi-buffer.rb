@@ -11,8 +11,7 @@ set :xen_cycle_dur, 32.0   # one breath, in seconds. Read once per Run, so it
                            # needs Stop + Run. M=0 stays the midpoint, the phases
                            # stretch to fit, and the beds are pitch_stretched over
                            # the cycle (not looped, not transposed). Any length
-                           # works; over 4x the slice is refused. Min ~6 s.
-                           # README 8a.
+                           # works; over 4x refused. Min ~6 s. README 8a.
 set :xen_density, 1.0      # grain density multiplier. 0.5 was the workaround for
                            # 5.0's watchdog; 4.6 runs full density (see README 7)
 set :xen_sched_ahead, 3.0  # scheduling lookahead for the breath loop. M=0 fires
@@ -66,6 +65,9 @@ set :xen_atmos_rotate_period, 41.0 # seconds, and deliberately NOT a divisor
                            # channels and the rotation is only an L-R sway # the atmosphere accent at M=0 - over the bed
 set :xen_m0_ceil_amp, 0.85 # M=0's granular scalpel, trimmed -15% so the atmosphere
                            # accent - same speakers, same 8 kHz band - can be heard
+set :xen_m0_fade, 2.5      # seconds for M=0 to ramp to silence, on the tanh amp
+                           # - the only fade the room hears. Was 5.0, which kept
+                           # M=0 under 37% of the exhale. README 8d.
 set :xen_m0_floor_amp, 2.0 # M=0's funnel, +6.0 dB. LPF'd at 466 Hz on 5-8, where
                            # the bed also lives, so the xen_atmos_amp raise buried
                            # it by 10.8 dB while the scalpel at 3-8 kHz was

@@ -329,11 +329,22 @@ m0_dur = 0.45
 # short = the tail covers the exhale (which is very soft anyway); too long =
 # the gap comes back abruptly.
 m0_tail = 1.2
-# M=0's long volume ramp. Applied to the tanh's amp, i.e. AFTER the
-# distortion/hpf - a saturator flattens any level drop that happens before
-# it, so a ramp baked into the render would barely be audible. Runs over the
-# whole exhale, so the transition is a cross-fade, not a cut.
-m0_fade = 5.0
+# M=0's volume ramp. Applied to the tanh's amp, i.e. AFTER the distortion/hpf
+# - a saturator flattens any level drop that happens before it, so a ramp
+# baked into the render would barely be audible. This is the ONLY fade on
+# M=0 that the room actually hears; render_m0.py's own cosine taper keeps the
+# rendered material honest but is mostly eaten by the saturation.
+#
+# It used to be a flat 5.0 - "runs over the whole exhale, so the transition is
+# a cross-fade, not a cut". That was a deliberate overlap, and this knob is
+# how you take it back: at 32 s the exhale is 13.575 s, so 5.0 spends 37% of
+# it with M=0 still sounding underneath, which is what blurs the handover.
+# Shorter = the exhale starts in clearer air; too short and the burst is
+# chopped instead of dissolving.
+#
+# It does NOT affect cycle timing - both M=0 halves ramp inside in_thread, so
+# the main loop's sleep is unchanged whatever this is.
+m0_fade = get(:xen_m0_fade, 5.0)
 # M=0's overall level. Also applied to the tanh's amp, for the same reason as
 # the ramp: the amps before the distortion/hpf are the ATTACK stage of a
 # saturator, not the output level - you could cut them in half and barely

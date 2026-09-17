@@ -17,7 +17,7 @@ the final level.
 
 Run:  python3 render_m0.py
 """
-import glob, math, os, random, struct, sys, wave
+import glob, math, os, random, struct, sys, wave, zlib
 
 BASE   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                       "output_xenakis_installation")
@@ -25,8 +25,38 @@ OUT    = os.path.join(BASE, "m0_render")
 SR     = 48000
 M0_DUR  = 0.45         # burst at full density; equal to m0_dur in xenakis.rb
 M0_TAIL = 2.60         # tail: the rain THINS OUT, long, over the whole exhale
-RENDER  = 3.60         # + room for the last tail grains to sound out in full
 K_DENS  = 1.2          # how fast the rain thins out (e^-k*t) - gentle
+
+# THE TAIL STRETCHES. Over the second half of M=0, as it hands over to the
+# exhale, each grain is played SLOWER - the same source, a lower rate, so it
+# lasts longer - and the rain thins in proportion. The two are one gesture:
+# the rain stops being rain and becomes a few long smears before it goes.
+#
+# It has to happen HERE and not in Sonic Pi, because `rate` is an :ir
+# parameter in the player synthdef (samplers.clj) - fixed when the synth
+# starts, not modulatable - so a playing sample cannot be slowed down.
+#
+# s(t) is exponential in the tail's progress, not linear: stretch is a RATIO,
+# so equal steps of it are equal musical steps. s = 1.0 at the burst's end,
+# STRETCH_END at the end of the tail.
+STRETCH_END = 4.0      # grain length multiplier at the end of the tail; 1.0 = off
+
+# DENSITY FOLLOWS THE STRETCH, exactly. The accept probability carries a 1/s
+# factor on top of the existing exponential thinning, so the event rate is
+# lam * exp(-K_DENS*dt) / s(t). Proportional is the right coupling and not an
+# arbitrary one: grains s times longer arriving s times more rarely occupy the
+# same total sounding time, so the texture keeps its continuity while the
+# events inside it become long and slow. Without it the stretched tail turns
+# to mush - s times longer at the same rate is s times the overlap.
+#
+# THE CLOUD FADES OUT. A cosine taper over the whole buffer from FADE_FROM to
+# the end, so the rendered material dissolves instead of stopping. Note what
+# the K_AMP comment below says though: both M=0 chains saturate, so a fade in
+# the render is largely flattened by the time it reaches the output. The fade
+# that is actually AUDIBLE is xen_m0_fade in xenakis.rb, on the tanh's amp,
+# after the saturation. This one keeps the render itself honest - and stops
+# the last, longest grains being cut off mid-flight by the buffer's end.
+FADE_FROM = M0_DUR + M0_TAIL * 0.5
 # NOTE: the AMPLITUDE decay is almost inaudible at the output, because both
 # M=0 chains saturate (distortion / hpf amp 6 -> tanh), and a saturator
 # flattens level changes. The real volume ramp happens in xenakis.rb, with
@@ -38,7 +68,10 @@ POOL   = 256           # how many distinct files enter the selection
 
 # The layers are now folders, not fragments of a filename.
 LAYERS = {
-    "ceil":  dict(sub="inhale/high",             lam=180.0,
+    # inspir/, not inhale/ - the folder was renamed and this was never updated,
+    # so pool_for() returned nothing and the script exited on "no files for
+    # layer ceil". It could not have run at all as it stood.
+    "ceil":  dict(sub="inspir/high",             lam=180.0,
                   amp=(0.30, 0.40), rate=(-2.0, -1.5), atk=0.02,  rel=0.2),
     "floor": dict(sub="sonic_blast_m0/n5_n6_n7", lam=120.0,
                   amp=(1.0,  1.4),  rate=(0.35, 0.5),  atk=0.005, rel=0.22),
@@ -80,7 +113,7 @@ def grain(path, rate, amp, atk, rel):
 
 def write_f32(path, samples):
     """Mono float32 WAV written by hand - the `wave` module doesn't support float."""
-    data = b"".join(struct.pack("<f", s) for s in samples)
+    data = struct.pack("<%df" % len(samples), *samples)
     with open(path, "wb") as f:
         f.write(b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVE")
         f.write(b"fmt " + struct.pack("<IHHIIHH", 16, 3, 1, SR, SR * 4, 4, 32))
@@ -91,15 +124,39 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     for old in glob.glob(os.path.join(OUT, "*.wav")):
         os.remove(old)
+    pools = {}
+    for layer, cfg in LAYERS.items():
+        pools[layer] = pool_for(cfg["sub"], POOL)
+        if not pools[layer]:
+            sys.exit("no files for layer %s" % layer)
+
+    # RENDER is DERIVED now, not a written-down 3.60. The slowest grain is the
+    # longest source in the pool played at the lowest rate the stretch
+    # produces, and it can start as late as `span`. Guessing this truncates
+    # exactly the grains the gesture is about, and silently - the mixdown just
+    # stops writing past the end of the buffer.
+    span = M0_DUR + M0_TAIL
+    longest = 0.0
+    for layer, cfg in LAYERS.items():
+        src_s = max(len(load(f)) for f in pools[layer]) / SR
+        slowest = min(abs(r) for r in cfg["rate"]) / STRETCH_END
+        longest = max(longest, src_s / slowest)
+    RENDER = span + longest
     nframes = int(RENDER * SR)
+    print("span %.2f s + longest stretched grain %.2f s -> render %.2f s"
+          % (span, longest, RENDER))
+    print("tail stretch 1.0 -> %.1fx, density thinned by the same factor\n"
+          % STRETCH_END)
+
     total_peak = {}
     for layer, cfg in LAYERS.items():
-        pool = pool_for(cfg["sub"], POOL)
-        if not pool:
-            sys.exit("no files for layer %s" % layer)
+        pool = pools[layer]
         peaks, counts = [], []
         for v in range(NVAR):
-            random.seed(hash((layer, v)) & 0x7fffffff)
+            # crc32, not hash(): str hashing is salted per process unless
+            # PYTHONHASHSEED is set, so this "seed" produced DIFFERENT variants
+            # on every run and no render was ever reproducible. Now it is.
+            random.seed(zlib.crc32(("%s%d" % (layer, v)).encode()))
             chans = [[0.0] * nframes for _ in range(4)]
             t, n = 0.0, 0
             span = M0_DUR + M0_TAIL
@@ -112,15 +169,24 @@ def main():
                 if t >= span:
                     break
                 if t > M0_DUR:
-                    decay = math.exp(-K_DENS * (t - M0_DUR))
+                    u = (t - M0_DUR) / M0_TAIL            # 0 .. 1 across the tail
+                    stretch = STRETCH_END ** u            # 1 .. STRETCH_END
+                    # Thinned by the exponential AND by 1/stretch, so the event
+                    # rate is lam * exp(-K_DENS*dt) / stretch - density falls
+                    # exactly as fast as the grains lengthen.
+                    decay = math.exp(-K_DENS * (t - M0_DUR)) / stretch
                     if random.random() > decay:
                         continue                          # rejected: the rain has thinned
                     amp_scale = math.exp(-K_AMP * (t - M0_DUR))
                 else:
-                    amp_scale = 1.0
+                    stretch, amp_scale = 1.0, 1.0
                 c = random.randrange(4)                   # rain: random channel
+                # rate DIVIDED by the stretch: lower rate, longer grain. The
+                # ceil rates are negative (reversed) and stay negative.
+                # atk/rel stay absolute, as they are in the real sampler - a
+                # stretched grain gets a proportionally shorter envelope.
                 g = grain(random.choice(pool),
-                          random.uniform(*cfg["rate"]),
+                          random.uniform(*cfg["rate"]) / stretch,
                           random.uniform(*cfg["amp"]) * amp_scale,
                           cfg["atk"], cfg["rel"])
                 off = int(t * SR)
@@ -129,6 +195,16 @@ def main():
                     if off + k < nframes:
                         buf[off + k] += s
                 n += 1
+
+            # THE CLOUD DISSOLVES. Raised cosine from FADE_FROM to the end of
+            # the buffer, so the rendered tail reaches silence instead of
+            # stopping, and the last long grains ring out inside the fade
+            # rather than being cut by the buffer's edge.
+            fs = int(FADE_FROM * SR)
+            for c in range(4):
+                buf = chans[c]
+                for i in range(fs, nframes):
+                    buf[i] *= 0.5 * (1 + math.cos(math.pi * (i - fs) / (nframes - fs)))
             counts.append(n)
             for c in range(4):
                 write_f32(os.path.join(OUT, "%s_v%02d_ch%d.wav" % (layer, v, c)),
