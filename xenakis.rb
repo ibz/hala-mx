@@ -576,7 +576,10 @@ define :play_cloud_phase do |o|
           # overlapping on a channel, so it catches exactly the unpredictable
           # pileups of the Poisson process - the only place the clouds could
           # exceed 1.0.
-          with_fx :tanh, krunch: 0.25 do
+          # get, not a handed-in opt: this is a per-run global, and `define`
+          # puts the breath loop's locals out of scope here (see the note at
+          # the top of play_cloud_phase).
+          with_fx :tanh, krunch: 0.25, amp: get(:xen_out_headroom, 1.0) do
             # THE SLOPE, voiced (see "THE BREATH'S HEIGHT"). The descent is
             # the "above" band draining out of the phase while the
             # "behind/below" band returns to flat - M=0's chord, ramped
@@ -828,6 +831,20 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # of them carried alone. That puts the power sum at 0.907. Coincident peaks
   # still reach 1.50, so pull xen_m0_floor_amp down too if it reads as
   # clipping rather than as weight.
+  # THE ONE TRIM THAT CATCHES THE SUM. Every chain here has its own tanh, but
+  # they reach the same hardware output through SEPARATE sound_out chains and
+  # sum AFTER all of them, with no limiter - so no existing knob can fix a
+  # clipping channel. Worse, the knobs that look like they should (atmos_amp,
+  # m0_amp, master_amp) all sit BEFORE a saturator, so they flatten: measured,
+  # cutting xen_atmos_inhale_amp by 7.4 dB moved the bed's peak only 0.858 ->
+  # 0.558, and the sum still clipped.
+  #
+  # This one is applied to the tanh's amp in EVERY chain, i.e. after all the
+  # saturation, so it is plain linear gain on what actually reaches the bus.
+  # Because it scales all of them by the same factor it costs nothing in
+  # balance - every ratio tuned by ear is preserved exactly - it only trades
+  # absolute level, which the amps can give back.
+  out_trim      = get(:xen_out_headroom, 1.0)
   m0_confine    = get(:xen_m0_confine, false)
   m0_pair_scale = m0_confine ? 1.0 / Math.sqrt(2) : 1.0
 
@@ -1139,7 +1156,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
             with_fx :compressor, threshold: enh_thr, slope_below: enh_below,
                                 slope_above: enh_above, clamp_time: 0.01,
                                 relax_time: 0.25 do
-              with_fx :tanh, krunch: 0.25 do
+              with_fx :tanh, krunch: 0.25, amp: out_trim do
                 # Inside the tanh, like every other boost in the piece: the
                 # resonance is part of what the ceiling has to catch. A
                 # Q ~17 peak only lifts a sliver of the band, so the
@@ -1189,7 +1206,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
         quad_accent.each do |ch|
           in_thread do
             with_fx :sound_out, output: ch, amp: 0 do
-              with_fx :tanh, krunch: 0.25 do
+              with_fx :tanh, krunch: 0.25, amp: out_trim do
                 with_fx :band_eq, freq: blauert_hi_note, res: blauert_res,
                                   db: blauert_hi_db do
                   sample f, amp: atmos_m0amp * master_amp,
@@ -1244,7 +1261,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       quad_ceil.each_with_index do |quad_chan, i|
         in_thread do
           with_fx :sound_out, output: quad_chan, amp: 0 do
-            with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_ceil_trim * grains_amp * m0_pair_scale,
+            with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_ceil_trim * grains_amp * m0_pair_scale * out_trim,
                             amp_slide: m0_fade do |vol|
               # amp: 6 is makeup gain, placed AFTER the filter - the HPF cuts
               # ~76% of the energy; without it the scalpel would be the
@@ -1296,7 +1313,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
       quad_floor.each_with_index do |floor_chan, i|
         in_thread do
         with_fx :sound_out, output: floor_chan, amp: 0 do
-          with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_floor_trim * grains_amp * m0_pair_scale,
+          with_fx :tanh, krunch: 0.25, amp: m0_amp * m0_floor_trim * grains_amp * m0_pair_scale * out_trim,
                           amp_slide: m0_fade do |vol|
             # The grain amplitudes are already baked into the render, as the
             # ATTACK stage of the distortion (dry peak ~3.1 - that's why the

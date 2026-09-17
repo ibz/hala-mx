@@ -1631,6 +1631,54 @@ sub-466 Hz weight at the feet and the 3-8 kHz scalpel arrive from the same
 four cabinets, so M=0 stops being two gestures in two places and becomes one
 event in one. That is the trade, taken deliberately.
 
+### 8f. `xen_out_headroom` — the only trim that catches the sum
+
+Every layer has its own `tanh` soft ceiling, but they reach the same hardware
+output through **separate `sound_out` chains** and sum *after* all of them,
+with no limiter. The HEADROOM note in section 5 says so; this is what to do
+about it.
+
+**Why no existing knob could fix a clipping channel.** `xen_atmos_amp`,
+`xen_atmos_inhale_amp`, `m0_amp` and `xen_master_amp` all sit *before* a
+saturator, so they flatten instead of trimming. Measured on channel 5 at M=0,
+sweeping the bed down while the M=0 pair stayed put:
+
+| `xen_atmos_inhale_amp` | bed peak | summed peak |
+|---|---|---|
+| 1.41 (+3.0 dB) | 0.858 | 1.314 |
+| 1.00 (+0.0 dB) | 0.760 | 1.185 |
+| 0.60 (−4.4 dB) | 0.558 | 1.073 |
+
+A 7.4 dB cut moved the bed's peak by 3.7 dB and the sum was still clipping.
+Trimming M=0 instead was no better: even `xen_m0_floor_amp` at 0.85 — *below*
+its original 1.0, giving up everything 8b won — only reached 0.960, because
+the bed alone peaks 0.858.
+
+**The fix is a trim applied to the `tanh`'s `amp` in every chain** — the beds,
+the clouds, the M=0 accent and both M=0 halves — i.e. after all the
+saturation, where it is plain linear gain on what actually reaches the bus.
+Because it scales all of them by the same factor, every ratio tuned by ear is
+preserved exactly; it trades absolute level only, which the amps give back.
+
+Measured on channel 5 at M=0, true summed peak across all 8 M=0 variants:
+
+```
+xen_out_headroom 1.00  ->  1.314   clips
+xen_out_headroom 0.75  ->  0.986   ok    (-2.5 dB overall)
+```
+
+**Sum-of-peaks vs. true sum.** Earlier sections quote sum-of-peaks, which
+assumes every source peaks in the same sample. Measured, the true sum runs
+about 87 % of that (1.314 against 1.504), so those figures were conservative —
+but the 0.567 bed peak in 8c was an *under*-measurement taken from one window;
+across the file it reaches 0.858, which is why 8c's numbers looked safer than
+they were.
+
+The inhale phase (bed + clouds on the same channels) is estimated at 1.009
+sum-of-peaks after the trim, so ~0.88 true — but that one is an estimate, not
+a measurement: the clouds are synthesised at runtime from the grain pools and
+cannot be measured statically the way the rendered beds and bursts can.
+
 ## Layout
 
 ```

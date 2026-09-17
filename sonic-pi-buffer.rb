@@ -29,19 +29,14 @@ set :xen_atmos_amp, 1.30   # the atmosphere bed - sits OVER the granular materia
                            # on 4 outputs in the studio and on 12 in the hall
                            # tuned by ear on the live desk, 2026-09-16
 set :xen_atmos_inhale_amp, 1.41 # the inhale hexagon's beds (1-6), +3.0 dB over
-                           # xen_atmos_amp. Same idea as xen_m0_ceil/floor_amp:
-                           # the two phases trim against each other, not just
-                           # against the granular.
-                           # DELIBERATELY PAST THE SAFE POINT: a coincident
-                           # bed+grain peak on 1-6 hits 1.05 and clips - no
-                           # limiter on these outs. 1.19 is the last value that
-                           # cannot. Risk accepted 2026-09-16. README 8c.
+                           # xen_atmos_amp - the two phases trim against each
+                           # other, not just against the granular. Clipping is
+                           # handled by xen_out_headroom now. README 8c.
 set :xen_atmos_exhale_amp, 1.0  # the exhale hexagon's beds (7-12). Untouched.
-set :xen_grains_amp, 0.75  # ALL granular material, UNDER the atmosphere - inhale/
-                           # exhale clouds AND M=0's ceil/floor grains - lowered
-                           # from 1.0 to push it further back, paired with the
-                           # xen_atmos_amp raise above. Left here on purpose: the
-                           # funnel gets its own knob instead. README 8b.
+set :xen_grains_amp, 0.75  # ALL granular material, UNDER the atmosphere - clouds
+                           # AND M=0's grains. Lowered from 1.0 with the
+                           # xen_atmos_amp raise; the funnel gets its own knob
+                           # instead of raising this back. README 8b.
 set :xen_atmos_m0_amp, 1.0 # tuned by ear on the live desk, 2026-09-16
 set :xen_atmos_rotate, 0.0 # off
                            # the beds TURN. Depth 0.0-1.0 of a travelling
@@ -155,6 +150,10 @@ set :xen_traj_width, 0.12  # thickness of the swept line, as a fraction of the
 set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
                            # on beds + clouds; all of M=0 stays at unity
 set :xen_enhance_threshold, 0.2 # where the 118 decides a signal is "quiet"
+set :xen_out_headroom, 0.75 # the ONLY trim that catches the summed bus - post-tanh
+                           # on every chain, so linear, and equal across all of
+                           # them so no balance changes. Takes ch 5-6 at M=0 from
+                           # a measured 1.314 to 0.986. README 8f.
 set :xen_master_amp, 1.0   # overall trim - the discrete outputs do NOT go through the limiter
 set :xen_bleep, false      # studio reference: a beep at the cycle boundaries (OFF in the hall)
 set :xen_seed, 0           # which rendition of the piece; changing it needs Stop + Run
