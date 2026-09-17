@@ -148,6 +148,10 @@ set :xen_traj_width, 0.12  # thickness of the swept line, as a fraction of the
                            # glissandi, not one, so the default keeps a narrow
                            # scatter around the swept centre and reads as a
                            # thick line. 1.0 melts back into :scatter
+set :xen_void, 0.0         # granular silence between the exhale's last grain and
+                           # the inhale's first, split either side of the cycle
+                           # boundary. 0 = the phases touch. 2.0 = how it was.
+                           # Needs Stop + Run. README 8h.
 set :xen_enhance, 0.4      # dbx 118: -1.0 compress .. 0.0 bypass .. +1.0 expand
                            # on beds + clouds; all of M=0 stays at unity
 set :xen_enhance_threshold, 0.2 # where the 118 decides a signal is "quiet"

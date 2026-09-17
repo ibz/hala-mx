@@ -182,9 +182,41 @@ puts "XENAKIS: loaded"
 # READ ONCE PER RUN. This line is top-level, like xen_density below, so
 # changing it needs Stop + Run - it is not a live tweak the way the amps are.
 cycle_dur    = get(:xen_cycle_dur, 16.0)
-# Atmos holds the whole cycle; the granular material sits INSIDE it, with a
-# margin at each end. That way atmos really does start before and end after.
+# The beds' fade time at each end of the cycle. It used to be the granular
+# material's margin too - grains sat INSIDE the beds, one atmos_margin clear
+# of each edge - and that pair of margins is what xen_void now sets; see the
+# void derivation below.
 atmos_margin = 1.0
+
+# THE BEDS OVERLAP ACROSS THE CYCLE BOUNDARY.
+#
+# A bed is one slice pitch_stretched over its whole life, with attack:
+# atmos_margin and release: atmos_margin, and the cycle's sleeps sum to
+# exactly cycle_dur (README 8a). So while a bed lasted exactly cycle_dur, the
+# outgoing set's RELEASE and the incoming set's ATTACK met END TO END at the
+# boundary rather than overlapping: both sets passed through zero at the same
+# instant, once a breath, and that zero was most of what the pause at the
+# boundary actually was. The grains were the other half.
+#
+# Giving a bed one atmos_margin MORE life turns that into a cross-fade: the
+# outgoing release now runs over the incoming attack. Cheap, because it adds
+# no messages - the same twelve triggers happen at the same instant they
+# always did, and only the previous set's nodes linger a second longer.
+#
+# What it does NOT give is a constant sum: two envelopes of the same shape
+# crossing mid-fade leave a dip (-3 dB in power at the midpoint if the curve
+# is linear, these beds being decorrelated and therefore summing by power).
+# A dip in one layer while the other plays through it is not a hole, which is
+# what it replaces. env_curve on the two `sample` calls below is the lever if
+# it ever wants shaping.
+#
+# THE ONE THING IT COSTS: bed_dur is no longer cycle_dur, so the stretch is no
+# longer exactly 1.0 when the cycle matches the slice length - at 16 s it is
+# 1.06, i.e. PitchShift now engages (by +1.0 semitone) where the default path
+# used to be untouched. At the 32 s this piece runs, the correction goes from
+# +12 to +12.5 semitones and the difference is nothing. Set this to 0.0 to get
+# the old arithmetic back exactly, and the zero-crossing with it.
+bed_overlap = atmos_margin
 # M=0 falls exactly at the midpoint of the cycle - the same point as node S6
 # and the geometric midpoint of the bridge between the hexagons (N_6, Y = 500
 # cm). The atmos and granular centers have to coincide.
@@ -211,25 +243,34 @@ m0_center    = cycle_dur / 2.0
 # on a 0.2 s window, not a phase vocoder (there is no PV_/FFT FX in Sonic
 # Pi at all; see the spectral note further down). On broadband breath
 # material a large correction smears and warbles, so the stretch is bounded
-# below. At cycle_dur == bed_len the rate is 1.0 and the compensation is 0
-# semitones, i.e. the default path is bit-identical to before this existed.
+# below. At cycle_dur == bed_len this used to resolve to rate 1.0 and a 0
+# semitone compensation - PitchShift doing nothing at all - but bed_overlap
+# ended that: the bed is a second longer than the cycle, so the shortest
+# stretch is now 1.06 and the shifter is always in circuit. See bed_overlap.
 #
 # pitch_stretch takes BEATS; use_bpm 60 at the top of this file makes a beat
-# one second, so cycle_dur passes straight through.
-bed_stretch = cycle_dur / bed_len
+# one second, so bed_dur passes straight through.
+#
+# bed_dur, not cycle_dur: a bed outlives its cycle by bed_overlap so that
+# consecutive sets cross-fade instead of both passing through zero at the
+# boundary. The stretch follows the bed's real life, or the PitchShift
+# compensation below would be correcting for the wrong rate.
+bed_dur     = cycle_dur + bed_overlap
+bed_stretch = bed_dur / bed_len
 bed_semis   = 12.0 * Math.log2(bed_stretch)
 if bed_stretch > 4.0 || bed_stretch < 0.25
-  raise "xen_cycle_dur #{cycle_dur} s against #{'%.3f' % bed_len} s atmos slices is a " \
+  raise "xen_cycle_dur #{cycle_dur} s (#{'%.1f' % bed_dur} s of bed) against " \
+        "#{'%.3f' % bed_len} s atmos slices is a " \
         "#{'%.2f' % bed_stretch}x stretch (#{'%+.1f' % bed_semis} semitones of PitchShift " \
         "correction). Past 4x that is warble, not atmosphere - re-slice at a length " \
         "closer to the cycle (SLICE_S = HOP_S in atmos_slice.py) and rebuild the pools."
 end
 # Envelopes follow the stretch on their own: sustain -1 resolves inside the
 # player synthdef against (1/rate) * buf-dur, so the atmos_margin fades still
-# land on the cycle's edges at any stretch. Nothing here has to scale them.
+# land on the bed's own edges at any stretch. Nothing here has to scale them.
 if bed_stretch != 1.0
   puts "XENAKIS: beds stretched #{'%.2f' % bed_stretch}x " \
-       "(#{'%.1f' % bed_len} s slice -> #{'%.1f' % cycle_dur} s cycle, " \
+       "(#{'%.1f' % bed_len} s slice -> #{'%.1f' % bed_dur} s bed, " \
        "#{'%+.1f' % bed_semis} semitones corrected)"
 end
 # Density multiplier. Each layer runs clean alone; only beds+grains together
@@ -372,27 +413,74 @@ m0_amp = 0.7
 # choreography - and the directional bands (the false verticality) are much
 # more audible on an empty stage.
 inhale_pause = m0_tail - 0.035
+
+# THE VOID AT THE CYCLE BOUNDARY - how much granular silence there is between
+# the exhale's last grain and the inhale's first.
+#
+# It used to be hard-wired at one atmos_margin either side of the granular
+# material, i.e. 2 s: the beds led it in and followed it out. Two seconds is
+# a long time to hear nothing in a 32 s breath, and it landed on top of the
+# beds' own crossing through zero (see bed_overlap above), so the two silences
+# coincided and the breath stopped instead of turning. At 0.0 the exhale now
+# runs to the boundary and the inhale starts on it: the phases TOUCH, and the
+# breath has no seam left to hear.
+#
+# What 0.0 costs: the beds no longer start before the grains and end after
+# them, so the piece's very first second is no longer a bed alone - the
+# inhale enters with it. Set it back to 2.0 for exactly the old behaviour,
+# and to anything between for a breath that pauses without stopping (the
+# spill, 1c, fills whatever void is left here - it is what keeps a nonzero
+# void from being the hole it used to be).
+#
+# READ ONCE PER RUN, like cycle_dur and for the same reason: the phase budget
+# below is computed from it. Changing it needs Stop + Run.
+void  = get(:xen_void, 0.0)
+lead  = void / 2.0     # silence before the inhale's first grain
+trail = void / 2.0     # silence after the exhale's last
+
 # The granular phases, equal and symmetric around m0_center.
-inhale_dur = m0_center - m0_dur / 2.0 - atmos_margin - inhale_pause - 0.035
-exhale_dur = cycle_dur - atmos_margin - (m0_center + m0_dur / 2.0 + m0_tail)
+inhale_dur = m0_center - m0_dur / 2.0 - lead - inhale_pause - 0.035
+exhale_dur = cycle_dur - trail - (m0_center + m0_dur / 2.0 + m0_tail)
 
 # With m0_center = cycle_dur / 2 both of the above reduce to
-# cycle_dur / 2 - 2.425, so they stay equal to each other on their own - but
-# they go NEGATIVE once the cycle drops under about 4.85 s, and a negative
-# sleep is a TimingError thrown from inside a Run rather than a sentence
-# here. The floor is derived from the constants, not written down, so it
-# follows m0_dur / m0_tail / atmos_margin if any of those ever move.
+# cycle_dur / 2 - 1.425 - void / 2 (so 2.425 at the old void of 2.0), which is
+# how they stay equal to each other on their own - but they go NEGATIVE once
+# the cycle gets short enough, and a negative sleep is a TimingError thrown
+# from inside a Run rather than a sentence here. The floor is derived from the
+# constants, not written down, so it follows m0_dur / m0_tail / void if any of
+# those ever move.
 phase_floor = 0.5
 if inhale_dur < phase_floor
   fixed = cycle_dur - inhale_dur - exhale_dur
   raise "xen_cycle_dur #{cycle_dur} s leaves only #{'%.3f' % inhale_dur} s per granular " \
-        "phase. The fixed costs - two #{atmos_margin} s margins, the " \
+        "phase. The fixed costs - the #{void} s void, the " \
         "#{'%.3f' % inhale_pause} s pause, m0_dur #{m0_dur}, m0_tail #{m0_tail} - take " \
         "#{'%.3f' % fixed} s, so the shortest usable cycle is about " \
         "#{'%.2f' % (fixed + 2 * phase_floor)} s."
 end
 cloud_exhale_positive = { span0: [7.0,  9.0], span1: [10.0, 12.0], lambda: 32.0 * xen_density, shape: 3 }
 cloud_exhale_negative = { span0: [8.0, 10.0], span1: [ 9.0, 11.0], lambda: 11.0 * xen_density, shape: 3 }
+
+# 0b-bis. WHERE THE PHASES START AND STOP, NAMED
+#
+# Numbers that used to be literals at the two play_cloud_phase call sites.
+# The spill (1c) has to LEAVE where the exhale stops and ARRIVE where the
+# inhale starts, so the same values now appear in more than one place - which
+# is exactly the drift m0_center's derivation exists to prevent. Change a
+# phase's endpoint here and the seam follows it.
+inhale_rate_from = 1.4    # the inhale enters pitched up, and darkens as it descends
+exhale_rate_to   = 1.34   # the exhale leaves pitched up too - the two nearly meet
+inhale_lpf_from  = 120    # MIDI: 8372 Hz
+exhale_lpf_to    = 112    # MIDI: 5274 Hz
+exhale_amp_lo    = 0.138  # the exhale's QUIETEST grain - where the spill starts
+
+# How far past the boundary the spill (1c) reaches, ON TOP of whatever void
+# xen_void leaves. This is the part that survives at void 0.0, where the two
+# phases already touch and there is no silence left to fill: a second of the
+# exhale's residue thinning out UNDER the inhale's entrance, so the breath
+# turns rather than cuts. m0_tail is the same idea at the same scale (1.2 s)
+# on the other side of M=0.
+spill_into = 1.0
 
 # 0b. RE-SCALING A GESTURE OVER A SMALLER RIG
 # count positions distributed over n outputs, wrapping in a circle, so every
@@ -640,6 +728,131 @@ define :play_cloud_phase do |o|
   end
 
   sleep o[:dur]
+end
+
+# 1c. THE SPILL - the exhale's last grains carried over the boundary
+#
+# The exhale stops dead. Whatever void xen_void leaves after it - 0.0 by
+# default - the next thing the room hears is the inhale's first grain, up an
+# octave of filter and at the other end of the hall. The spill is the seam:
+# a handful of the exhale's own grains that keep going over the boundary and
+# dissolve UNDER the inhale's entrance, spill_into seconds past it.
+#
+# It is m0_tail's trick at the other junction. The exhale doesn't start from
+# dead silence because M=0's rendered rain is still thinning over it, 20 dB
+# down; this does the same for the inhale, and it does it whether the void is
+# two seconds wide or nothing at all. A nonzero void NEEDS it - that is what
+# keeps the pause from being the hole it used to be - and at void 0.0 it is
+# what keeps the turn from being a splice.
+#
+# NOT a phase. The grains are placed one per even slot with a jitter of +-0.4
+# of a slot rather than drawn from a Poisson process: at five events over a
+# second or two the exponential's long tail IS what you hear - a clump and
+# then a hole, which is the artefact being fixed. (+-0.4 against a spacing
+# of 1.0 cannot reorder two neighbours, 0.9 < 1.1, so the times are sorted
+# by construction and nothing has to sort them.)
+#
+# A spill grain is the exhale's last state sliding into the inhale's first:
+# rate exhale_rate_to -> inhale_rate_from, lpf exhale_lpf_to ->
+# inhale_lpf_from (5274 -> 8372 Hz, and the two phases were already that
+# close), and a position running from the exhale's closing span to the
+# inhale's opening one - on the full rig, the walk from hexagon B back to
+# hexagon A, the breath returning to where it starts. Amplitude is the one
+# thing that does NOT continue: it decays, because this is a residue.
+define :play_spill do |o|
+  discrete = o[:pan_mode] == :discrete
+  bl       = o[:blauert]
+  n        = o[:n]
+  # The drawing's bounds, folded onto a smaller rig exactly as a phase folds
+  # (play_cloud_phase, step 1) - the spill spans both hexagons, so on 4
+  # outputs it is the same walk compressed onto 1..4.
+  lo_d = [o[:from_span][0], o[:to_span][0]].min
+  hi_d = [o[:from_span][1], o[:to_span][1]].max
+  slot = o[:dur].to_f / n
+  head = get(:xen_out_headroom, 1.0)
+
+  # Detached: the cycle's timing must not depend on this. The thread outlives
+  # the live_loop iteration that started it and goes on sounding into the next
+  # one, like the atmosphere beds and M=0's accent.
+  in_thread do
+    prev = 0.0
+    n.times do |i|
+      t = (i + 0.5 + rrand(-0.4, 0.4)) * slot
+      sleep t - prev
+      prev = t
+      f = (n == 1) ? 0.0 : i.to_f / (n - 1)
+
+      lo  = o[:from_span][0] + (o[:to_span][0] - o[:from_span][0]) * f
+      hi  = o[:from_span][1] + (o[:to_span][1] - o[:from_span][1]) * f
+      pos = rrand(lo, hi)
+      pos = 1.0 + (pos - lo_d) * (o[:rig] - 1) / (hi_d - lo_d) if o[:rig] < hi_d
+      ch   = pos.floor
+      frac = pos - ch
+
+      amp  = o[:amp_from] + (o[:amp_to] - o[:amp_from]) * f
+      rate = o[:rate_from] + (o[:rate_to] - o[:rate_from]) * f + rrand(-o[:rate_jit], o[:rate_jit])
+      lpf  = o[:lpf_from]  + (o[:lpf_to]  - o[:lpf_from])  * f + rrand(-o[:lpf_jit],  o[:lpf_jit])
+      # ONE cut per grain, chosen before the fold below: in continuous mode
+      # the two events are the same grain split across two speakers, not two
+      # grains.
+      cut = o[:pool][:cuts].choose
+
+      # NO ENHANCER on this chain, unlike a phase. The 118 is set to expand
+      # (slope_below 1.2 at the desk default), a spill grain sits at or under
+      # the exhale's amp_lo, and that is below enh_thr - so the expander would
+      # push the one layer whose whole job is to stay just audible under the
+      # inhale's entrance about a dB further down. The tanh stays: xen_out_headroom is the only
+      # trim that catches the summed bus, and it is post-tanh on every other
+      # chain in the piece.
+      fire = lambda do |c, a|
+        in_thread do
+          with_fx :sound_out, output: c, amp: 0 do
+            with_fx :tanh, krunch: 0.25, amp: head do
+              grain = lambda do
+                sample o[:pool][:wav], start: cut[:start], finish: cut[:finish],
+                       amp: a, rate: rate, lpf: lpf,
+                       attack: 0.01, release: 0.06
+              end
+              # The slope, held rather than ramped - the exhale ends at the
+              # top of it and the inhale starts there too, so the height cue
+              # is flat across the handover. Skipped entirely at 0 dB, for the
+              # reason the phase skips it: a transparent band_eq is still a
+              # node doing per-sample work.
+              if bl[:hi_from].abs < 0.01
+                grain.call
+              else
+                with_fx :band_eq, freq: bl[:hi_note], res: bl[:res], db: bl[:hi_from] do
+                  with_fx :band_eq, freq: bl[:lo_note], res: bl[:res], db: bl[:lo_from] do
+                    grain.call
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+
+      # The same power-law fold as a phase - cos^2 / sin^2 of the position's
+      # fraction - so a spill grain is placed by exactly the law the rest of
+      # the piece places grains with, and the two pan modes stay comparable
+      # here too. At the very top of the range frac is exactly 0, which is
+      # what keeps ch + 1 from addressing a channel off the rig.
+      #
+      # What is NOT carried over is the phase's `> 0.05` cull of quiet halves.
+      # That is a voice-count economy worth having at 64 events a second and
+      # WRONG at five: a spill grain starts near the exhale's amp_lo and ends
+      # a third of that, so the cull would silently delete the end of the
+      # bridge - the half of it that matters most, being the half nearest the
+      # inhale.
+      if discrete
+        fire.call((rand < Math.sin(frac * Math::PI / 2) ** 2) ? ch + 1 : ch, amp)
+      else
+        fire.call(ch, amp * Math.cos(frac * Math::PI / 2))
+        amp_b = amp * Math.sin(frac * Math::PI / 2)
+        fire.call(ch + 1, amp_b) if amp_b > 0.0
+      end
+    end
+  end
 end
 
 # 1d. THE ATMOSPHERE LOADER THREAD
@@ -988,6 +1201,13 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   # :scatter again, only phase-locked).
   traj_width  = get(:xen_traj_width, 0.12)
 
+  # THE SPILL - how many of the exhale's grains are carried over the cycle
+  # boundary to cover the seam, and to fill whatever void xen_void leaves
+  # before them. 0 is a bare turn. Live, unlike the void itself: what the
+  # boundary sounds like can only be judged by standing in it. See play_spill
+  # (1c) and README 8h.
+  spill_n     = get(:xen_spill, 5).to_i
+
   # REAL GEOMETRY (Hala MX floor plan + the Aug 6 sketch):
   # 12 physical monitors, ALL at the same height, Z = 1.8 m, arranged in two
   # HORIZONTAL hexagons, side by side along the length of the hall:
@@ -1035,12 +1255,12 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   play_floor  = [:all, :m0, :m0_floor].include?(focus)
   play_exhale = [:all, :exhale].include?(focus)
 
-  # The final void: long for a full breath, short when repeating a single
-  # gesture to tune it.
-  # The final void. For a full breath it's computed as the REMAINDER of
-  # cycle_dur, so the cycle stays a fixed 16 s even if we change one phase.
-  # The trailing margin, the counterpart of atmos_margin at the start.
-  gap = (focus == :all) ? atmos_margin : 1.0
+  # The trailing half of the void (xen_void), and the counterpart of `lead` at
+  # the start. 0.0 by default: the exhale runs to the cycle boundary and the
+  # next inhale starts on it. A single-gesture focus keeps a second of air
+  # around the thing being tuned, which is a working convenience, not the
+  # piece.
+  gap = (focus == :all) ? trail : 1.0
 
   # Only log when something changes, so we always know what's active.
   cfg_now = [rig_outputs, focus]
@@ -1060,8 +1280,9 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
     # a/b are decorrelated (measured ~0.00), so we put them on alternating
     # vertices: two distinct sources enveloping the space, not one panned
     # source.
-    # attack/release = atmos_margin -> fades in before and out after the
-    # granular material.
+    # attack/release = atmos_margin, and the bed lives bed_overlap longer than
+    # the cycle, so consecutive sets cross-fade at the boundary instead of
+    # both passing through zero there.
     atmos_beds = { atm[:inh_a] => [1, 3, 5], atm[:inh_b] => [2, 4, 6],
                    atm[:exh_a] => [7, 9, 11], atm[:exh_b] => [8, 10, 12] }
 
@@ -1141,7 +1362,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
           phase_trim = i < 2 ? atmos_inh_amp : atmos_exh_amp
           bed_amp = atmos_amp * phase_trim * master_amp * bed_scale
           rotate = lambda do |node|
-            steps = (cycle_dur / rot_step).floor
+            steps = (bed_dur / rot_step).floor
             steps.times do
               # vt, not a local counter: the phase has to stay continuous
               # ACROSS cycles, or the rotation resets every breath and the
@@ -1175,17 +1396,18 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                 rot_on = rot_depth > 0.001 && n_ch >= 2
                 slide  = rot_on ? rot_step : 0
                 # pitch_stretch: the bed is one slice stretched over the
-                # whole breath, not a slice plus silence - see bed_stretch.
-                # At the default cycle it resolves to rate 1.0 / pitch 0,
-                # which is exactly what a bare `sample` did here before.
+                # whole breath AND the overlap into the next one, not a slice
+                # plus silence - see bed_dur / bed_stretch. It no longer
+                # resolves to rate 1.0 / pitch 0 at any cycle length: the
+                # overlap makes the shortest stretch 1.06 (see bed_overlap).
                 if spec_db.abs < 0.01
-                  bed = sample f, pitch_stretch: cycle_dur,
+                  bed = sample f, pitch_stretch: bed_dur,
                                   amp: bed_amp, amp_slide: slide,
                                   attack: atmos_margin, release: atmos_margin
                   rotate.call(bed) if rot_on
                 else
                   with_fx :band_eq, freq: bed_note, res: spec_res, db: spec_db do
-                    bed = sample f, pitch_stretch: cycle_dur,
+                    bed = sample f, pitch_stretch: bed_dur,
                                     amp: bed_amp, amp_slide: slide,
                                     attack: atmos_margin, release: atmos_margin
                     rotate.call(bed) if rot_on
@@ -1201,7 +1423,10 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
     # The vertical layer from M=0: enters together with the burst, louder
     # than the grains, with the Blauert accent at 8 kHz so it's heard ABOVE.
     in_thread do
-      sleep atmos_margin + inhale_dur + inhale_pause
+      # lead, not atmos_margin: this has to be the same sum the main thread
+      # sleeps to reach M=0 (lead + inhale_dur + inhale_pause), or the accent
+      # lands beside the burst instead of on it.
+      sleep lead + inhale_dur + inhale_pause
       [atm[:m0_up], atm[:m0_pz]].each do |f|
         quad_accent.each do |ch|
           in_thread do
@@ -1220,7 +1445,8 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
     end
   end
 
-  sleep atmos_margin   # atmos only - the granular material enters after
+  sleep lead   # granular silence before the inhale - 0.0 by default, so the
+               # beds and the first grains now enter together (xen_void)
 
   # ==========================================
   # PHASE 1: INHALE (fluid descent along the -12° slope, now actually voiced)
@@ -1232,7 +1458,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                        pan_mode: pan_mode,
                        traj_mode: traj_mode, traj_cycles: traj_cycles,
                        traj_width: traj_width,
-                       pitch_from: 1.4, pitch_to: 0.95, pitch_jit: 0.04,
+                       pitch_from: inhale_rate_from, pitch_to: 0.95, pitch_jit: 0.04,
                        # lpf_to was 75 - MIDI, so 622 Hz. The 17 Sep capture
                        # (README 10) measured clarity at four positions and
                        # NOTHING localises at all of them below 1 kHz: BACK has
@@ -1248,7 +1474,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                        # instead of the inhale disappearing under it. Still 2.4
                        # octaves of darkening from 8372 Hz, so the descent reads
                        # as a descent; it just stops before it stops localising.
-                       lpf_from: 120,   lpf_to: 88,     lpf_jit: 3,
+                       lpf_from: inhale_lpf_from, lpf_to: 88, lpf_jit: 3,
                        amp_lo: 0.155 * master_amp * grains_amp, amp_hi: 0.31 * master_amp * grains_amp,
                        # down the slope: full height at S1, the speaker plane
                        # by M=0.
@@ -1365,7 +1591,7 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                        pan_mode: pan_mode,
                        traj_mode: traj_mode, traj_cycles: traj_cycles,
                        traj_width: traj_width,
-                       pitch_from: 0.8, pitch_to: 1.34, pitch_jit: 0.06,
+                       pitch_from: 0.8, pitch_to: exhale_rate_to, pitch_jit: 0.06,
                        # lpf_from matters MORE than the amplitude here:
                        # the "shatter" material loses 10.5 dB through the
                        # filter at 75 (622 Hz) - practically making the
@@ -1374,8 +1600,8 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
                        # Hz) the loss drops to ~6 dB. Grain fusion is now
                        # handled by the "long only" pools, not by darkening
                        # the filter.
-                       lpf_from: 88,    lpf_to: 112,    lpf_jit: 4,
-                       amp_lo: 0.138 * master_amp * grains_amp, amp_hi: 0.345 * master_amp * grains_amp,
+                       lpf_from: 88, lpf_to: exhale_lpf_to, lpf_jit: 4,
+                       amp_lo: exhale_amp_lo * master_amp * grains_amp, amp_hi: 0.345 * master_amp * grains_amp,
                        entry_amp: 2.4,
                        # back up it: the exhale is the inhale's ramp reversed,
                        # leaving M=0 on the plane and recovering S11's 4.00 m.
@@ -1388,6 +1614,37 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   end
 
   synth :pretty_bell, note: :c6, release: 0.8, amp: 0.35 if bleep  # the exhale has ended
+
+  # THE SPILL (1c). Fired here, at the exhale's last instant, and running
+  # through `sleep gap`, the next cycle's `lead`, and spill_into seconds of
+  # the inhale itself - hence that sum as its duration. At the default void
+  # of 0.0 the first two terms are zero and the whole spill happens under the
+  # inhale's entrance, which is the point: there is no silence left to fill,
+  # only a seam to cover. play_spill detaches immediately, so this costs the
+  # cycle no time at all.
+  if play_exhale && grains_on && spill_n > 0
+    play_spill n: spill_n, dur: gap + lead + spill_into, rig: rig_outputs,
+               pan_mode: pan_mode, pool: pool_exhale_shatter,
+               # the shatter, not the pressure: the pressure is the low layer
+               # that stays near the ground, and what should still be in the
+               # air when a breath ends is what flew up.
+               from_span: cloud_exhale_positive[:span1],
+               to_span:   cloud_positive[:span0],
+               rate_from: exhale_rate_to, rate_to: inhale_rate_from, rate_jit: 0.04,
+               lpf_from:  exhale_lpf_to,  lpf_to:  inhale_lpf_from,  lpf_jit: 3,
+               # Starts at the exhale's amp_lo - its QUIETEST grain, not an
+               # average - and decays 10.5 dB from there across the boundary.
+               # It has to stay audible under a bed that is mid-crossfade and
+               # an inhale that is entering, without ever reading as a sixth
+               # phase of the breath: it ends 11.6 dB under the inhale's own
+               # quietest grain, which is where a residue belongs.
+               amp_from: exhale_amp_lo * master_amp * grains_amp,
+               amp_to:   0.041 * master_amp * grains_amp,
+               # Held at the top of the slope: the exhale arrives there and
+               # the inhale leaves from there, so the height cue does not dip
+               # in the middle of the handover.
+               blauert: blauert_ramp.call(tilt_top, tilt_top, blauert_amt)
+  end
 
   sleep gap # the stochastic breathing void
 end

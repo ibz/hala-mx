@@ -212,8 +212,9 @@ Structure of one cycle:
    and are deduplicated — on 4 outputs the two decorrelated `a` beds land on
    1,3 and the `b` beds on 2,4; level across rig sizes and the resonant
    partials it carries are both §5),
-   with `attack`/`release` equal to the cycle margin so it fades in before
-   and out after the granular material; a rotating set (not the whole
+   with a 1 s `attack`/`release` and a life one `bed_overlap` longer than the
+   cycle, so consecutive sets cross-fade at the boundary rather than both
+   passing through zero there (§8h); a rotating set (not the whole
    corpus — 434 files / 1.9 GB won't fit in memory at once) is preloaded
    one cycle ahead by `live_loop :atmos_loader` and freed with
    `sample_free` so it doesn't hit the scsynth 4096-buffer limit — both
@@ -1384,7 +1385,8 @@ Both of these are desk knobs whose full reasoning would not fit in
 `get(:xen_cycle_dur, 16.0)`, with `m0_center` **derived** as `cycle_dur / 2`.
 Deriving it is the point: the two numbers drifting apart is exactly what a
 cycle knob invites, and holding M=0 at the midpoint is also what keeps the two
-granular phases equal — both reduce to `cycle_dur / 2 - 2.425`.
+granular phases equal — both reduce to `cycle_dur / 2 - 1.425 - void / 2`
+(§8h; that was a flat `- 2.425` while the void was hard-wired at 2 s).
 
 It is read at the top level, so it takes effect on Run, not on a save.
 
@@ -1404,22 +1406,39 @@ and compensates the transposition back, so the spectrum stays put.
 The cost is that the compensation is SuperCollider's `PitchShift`, a granular
 shifter on a 0.2 s window — there is no phase vocoder anywhere in Sonic Pi.
 On broadband breath material a large correction smears, so the stretch is
-refused past 4x. At `cycle_dur == bed_len` it resolves to rate 1.0 / pitch 0,
-i.e. the default path is unchanged.
+refused past 4x.
+
+> **This used to be free at the default cycle.** At `cycle_dur == bed_len` the
+> stretch resolved to rate 1.0 / pitch 0 and `PitchShift` did nothing at all.
+> The bed overlap (§8h) ends that: `bed_dur` is a second longer than the cycle,
+> so at 16 s the stretch is 1.06 and the beds are always shifted, by +1.0
+> semitone. At the 32 s the piece actually runs, the correction goes from +12 to
+> +12.5 and the difference is nothing; at 16 s it is a granular shifter engaging
+> where none used to. `bed_overlap = 0.0` in `xenakis.rb` restores the old
+> arithmetic exactly, at the cost of putting the boundary's zero-crossing back.
 
 Envelopes follow the stretch without help: `sustain: -1` resolves inside the
 player synthdef against `(1/rate) * buf-dur` (`samplers.clj:114-115`), so the
-1 s `atmos_margin` fades still land on the cycle's edges at any stretch.
+1 s `atmos_margin` fades still land on the bed's own edges at any stretch.
+
+The stretch is taken over `bed_dur = cycle_dur + bed_overlap`, not `cycle_dur`:
+a bed outlives its cycle by a second so that consecutive sets cross-fade at the
+boundary (§8h), and the compensation has to follow the bed's real life.
 
 | `xen_cycle_dur` | rate | pitch | phases each |
 |---|---|---|---|
-| 16 s (default) | 1.000 | +0 | 5.575 s |
-| 24 s | 0.667 | +7 | 9.575 s |
-| 32 s (current) | 0.500 | +12 | 13.575 s |
+| 16 s (default) | 0.941 | +1.0 | 6.575 s |
+| 24 s | 0.640 | +7.7 | 10.575 s |
+| 32 s (current) | 0.485 | +12.5 | 14.575 s |
+
+(Phase lengths at the default `xen_void 0.0`; each is a second shorter at the
+old void of 2.0. Rate and pitch are `bed_len / bed_dur` — the overlap makes
+every stretch 1/17th slower than the cycle alone would.)
 
 M=0 itself does **not** stretch — `m0_dur`, `m0_tail` and the accent are
 absolute, so a longer breath means longer phases around the same impact.
-The floor is ~4.85 s of fixed costs, so nothing under about 6 s runs.
+The floor is ~2.85 s of fixed costs at `xen_void 0.0`, so nothing under about
+4 s runs; the old 2 s void put that at ~4.85 s and 6 s.
 `xen_atmos_rotate_period` (41 s) was chosen coprime with 16; re-check it if
 you change the cycle.
 
@@ -1576,7 +1595,7 @@ upstream of it — so the cosine taper in `render_m0.py` keeps the rendered
 material honest but is mostly eaten. The fade the room hears is the `control`
 on the tanh's `amp`, after saturation. It was a flat 5.0 s, chosen when the
 overlap was wanted ("a cross-fade, not a cut"); at a 32 s cycle that is 37 % of
-the 13.575 s exhale spent with M=0 still underneath. 2.5 s lets the stretched
+the (then) 13.575 s exhale spent with M=0 still underneath. 2.5 s lets the stretched
 tail dissolve and then gets out of the way. It does not affect cycle timing —
 both halves ramp inside `in_thread`.
 
@@ -1732,6 +1751,168 @@ xen_out_headroom 0.55 -> 0.983   ok
 Worth knowing before reaching for the trim: the onset's value is rise time, not
 level, and rise time survives a level cut intact. Backing the M=0 pair down
 costs less of the impact than it looks like it should.
+
+### 8h. Killing the pause at the cycle boundary — `xen_void`
+
+The breath used to stop between the exhale and the inhale. **Two separate
+silences landed on the same instant**, and both are now closed.
+
+**1. Two seconds with no granular material.** `sleep gap` closed the cycle
+(`atmos_margin`, 1.0 s) and the next one opened with `sleep atmos_margin` —
+grains sat *inside* the beds, one margin clear of each edge, so the breath had
+2 s of nothing in it out of 32.
+
+**2. The beds crossing through zero.** A bed is one slice `pitch_stretch`ed
+over its life with `attack: atmos_margin, release: atmos_margin`, and the
+cycle's sleeps sum to exactly `cycle_dur` (§8a) — so while a bed lasted exactly
+`cycle_dur`, the outgoing set's release and the incoming set's attack met **end
+to end** rather than overlapping. Both sets were at zero at the boundary.
+
+```
+ before                                  after
+     exhale ends        inhale enters        exhale ends / inhale enters
+         |<-- 2.0 s -->|                              |
+ grains  ‾‾‾|                     |‾‾‾        grains  ‾‾‾‾‾‾‾|‾‾‾‾‾‾‾
+ beds    ‾‾‾\___             ___/‾‾‾         beds     ‾‾‾‾‾\_ _/‾‾‾‾‾
+                \___________/                                X
+              everything at zero                      sets cross-fade
+```
+
+#### The granular void is now a knob, defaulting to zero
+
+```ruby
+void  = get(:xen_void, 0.0)
+lead  = void / 2.0     # silence before the inhale's first grain
+trail = void / 2.0     # silence after the exhale's last
+```
+
+`lead` and `trail` replace `atmos_margin` in the phase budget, so the phases
+absorb whatever the void gives up:
+
+```
+inhale_dur = m0_center - m0_dur / 2.0 - lead  - inhale_pause - 0.035
+exhale_dur = cycle_dur - trail - (m0_center + m0_dur / 2.0 + m0_tail)
+```
+
+Both still reduce to `cycle_dur / 2 − 1.425 − void / 2`, so they stay equal to
+each other on their own, and the cycle still sums to exactly `cycle_dur` —
+checked at 5/6/8/16/32 s against voids of 0 and 2, sum error 0.0. At the desk's
+32 s cycle each phase gains a second: **13.575 → 14.575 s**. The ramps are
+normalized on `f = t/dur`, so the gesture just stretches; density is
+grains/second, so the texture is unchanged and the event rate with it.
+
+| `xen_void` | what you get |
+|---|---|
+| `0.0` (default) | the exhale runs to the boundary, the inhale starts on it — the phases touch |
+| `2.0` | exactly the old behaviour |
+| between | a breath that pauses without stopping — and the spill fills it |
+
+It is read **once per Run**, like `xen_cycle_dur` and for the same reason: the
+phase budget is derived from it at the top of the file, where a bad value can
+still `raise` a sentence instead of throwing a `TimingError` from inside a job.
+
+**What zero costs.** The beds no longer start before the grains and end after
+them, so the piece's first second is no longer a bed alone — the inhale enters
+with it. That was the stated purpose of the margins ("atmos really does start
+before and end after"), and it is the one thing given up.
+
+#### The beds now cross-fade
+
+`bed_dur = cycle_dur + bed_overlap` (`bed_overlap = atmos_margin`), so a bed
+outlives its cycle by a second and the outgoing release runs *over* the
+incoming attack instead of meeting it at zero. `bed_stretch` is derived from
+`bed_dur`, not `cycle_dur`, or the `PitchShift` compensation would be
+correcting for the wrong rate (§8a).
+
+**It adds no messages.** The same twelve triggers happen at the same instant
+they always did; only the previous set's nodes linger a second longer, and the
+atmosphere loader already frees sets *two* cycles back rather than one, so
+nothing is freed under a bed that is still sounding.
+
+**It does not give a constant sum.** Two envelopes of the same shape crossing
+mid-fade leave a dip — −3 dB in power at the midpoint for a linear crossfade,
+these beds being decorrelated (measured ~0.00) and therefore summing by power.
+A −3 dB dip in one layer while the other plays through it is not a hole, which
+is what it replaces. `env_curve` on the two `sample` calls is the lever if it
+ever wants shaping.
+
+#### The spill covers the seam — §1c, `play_spill`
+
+With the void closed there is no silence left to fill, but there is still a
+**seam**: the exhale stops at `lpf 112` on channels 10–12 and the inhale starts
+at `lpf 120` on channels 1–3. The spill is a handful of the exhale's own grains
+that keep going over the boundary and dissolve *under* the inhale's entrance,
+`spill_into` (1.0 s) past it. It is `m0_tail`'s trick at the other junction —
+the exhale doesn't start from dead silence because M=0's rain is still thinning
+over it, 20 dB down, and now the inhale doesn't either.
+
+Each grain is the exhale's last state sliding into the inhale's first, on the
+same normalized `f` a phase uses:
+
+| | leaves at | arrives at |
+|---|---|---|
+| rate | 1.34 (`exhale_rate_to`) | 1.4 (`inhale_rate_from`) |
+| lpf | 112 (5274 Hz) | 120 (8372 Hz) |
+| position | exhale's closing span 10–12 | inhale's opening span 1–3 |
+| amp | exhale's `amp_lo` 0.138 | 0.041 — 11.6 dB under the inhale's quietest grain |
+
+A default run lands on something like `11 → 8 → 6 → 4 → 2`: the breath walking
+back to the corner it starts from, arriving as the inhale opens there. It folds
+onto a smaller rig by the rule a phase folds by, so on 4 outputs it is the same
+walk compressed onto `1–4`. `xen_void` widens the window it has to walk in
+(`dur: gap + lead + spill_into`); `set :xen_spill, 0` on the desk turns it off.
+
+Four deliberate departures from phase behaviour:
+
+- **The grains are placed, not drawn.** One per even slot with a jitter of ±0.4
+  of a slot, not a Poisson process. At five events over a second or two the
+  exponential's long tail *is* what you hear — a clump and then a hole, which is
+  the artefact being fixed. (±0.4 against a spacing of 1.0 cannot reorder two
+  neighbours, 0.9 < 1.1, so the times come out sorted by construction.)
+- **The shatter pool, not the pressure.** The pressure is the exhale's low
+  layer, the one that stays near the ground; what should still be in the air
+  when a breath ends is what flew up.
+- **No enhancer on the chain.** The 118 is set to expand (`slope_below` 1.2 at
+  the desk default), and a spill grain sits at or under the exhale's `amp_lo`,
+  which is below `xen_enhance_threshold` — so the expander would push the one
+  layer whose whole job is to stay just audible about a dB *further down*. The
+  `tanh` stays: `xen_out_headroom` is the only trim that catches the summed bus
+  (§8f), and it is post-`tanh` on every other chain in the piece.
+- **No `> 0.05` cull of quiet halves** in `:continuous` mode. That cull is a
+  voice-count economy worth having at 64 events a second and wrong at five: the
+  spill *ends* at 0.041, so it would silently delete the end of the seam — the
+  half nearest the inhale, which is the half that matters.
+
+The slope is **held**, not ramped: the exhale arrives at the top of it and the
+inhale leaves from there, so the height cue doesn't dip across the handover. At
+`xen_blauert 0` the band pair is skipped rather than instantiated flat, as
+everywhere else. The thread is detached at the exhale's last instant, so the
+cycle's timing is untouched and it goes on sounding across the live_loop
+boundary into the next iteration, like the beds and M=0's accent. `Stop` kills
+it like any other subthread.
+
+Those endpoints — the two rates, the two cutoffs, the exhale's `amp_lo` — are
+**named** (`0b-bis` in `xenakis.rb`) rather than literals at the two
+`play_cloud_phase` call sites: the spill has to leave where the exhale stops and
+arrive where the inhale starts, so the same values sit in more than one place,
+which is exactly the drift `m0_center`'s derivation exists to prevent.
+
+#### What to watch
+
+**The cycle-start burst is now bigger.** With `lead` at 0 the twelve bed
+threads and `play_cloud_phase`'s twelve channel threads are created in the same
+instant — about 24, against the 16 that M=0 fires in 35 ms and that measured
+LATE spikes of ~1100 ms at the default lookahead (§4). The desk runs
+`xen_sched_ahead 3.0`, which took that same burst to 4 ms, so there should be
+room; it has not been measured with both bursts coincident. `./check-session.sh`
+reports worst-LATE, and `set :xen_void, 0.2` separates the two bursts again
+without putting an audible pause back.
+
+> **Honest note.** None of this has been heard in Hala MX. The arithmetic is
+> checked (the cycle sums, the phases stay symmetric, 3000 randomised spill runs
+> across rigs 1/2/4/12 and both pan modes stay on the rig and in order), but
+> whether a breath with no pause in it still reads as breathing is a question
+> for the room. `xen_void` is the way back: 2.0 is exactly how it was.
 
 ## 9. Autostart on login
 
