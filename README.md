@@ -2030,7 +2030,7 @@ untouched levers are *width* (four channels of twelve are on the path —
 `vac_path` could take 1, 4, 7, 11 and make the hole physically bigger),
 *snatch* (`vac_in` 0.35 s — the suddenness of the removal is probably the
 single biggest "feel" lever left). *Dwell* has since been spent: `vac_hold`
-went 0.25 s → 2.0 s on 2026-09-18 (see *The shape*). Those change the
+went 0.25 s → 2.0 s → 3.5 s on 2026-09-18 (see *The shape*). Those change the
 gesture's shape rather than its size, so they are a separate decision from
 turning it up.
 
@@ -2043,55 +2043,69 @@ vacuum is not the breath's path, it's what the breath is being pulled into.
 
 ```
  ch 5-6    ___
-              \___________________..-------
- ch 9-10   ___________________
-                              \___________________..-------
-              ^1.000          ^3.000      ^4.450          ^6.450
-               near pair       far pair    near pair       all four
-               opens           opens       refilled        at rest
-                                 ^ 3.350: all four at full depth,
-                                   for that one instant
+              \_______________________..-----
+ ch 9-10   _______________
+                          \_______________________..-----
+              ^1.000      ^3.000     ^4.850 ^5.950      ^7.950
+               near pair   far pair   refill near        all four
+               opens       opens      starts at rest     at rest
+                            |--------|
+                            the plateau, 1.50 s: the whole path at full depth
 
- in 0.35 / hold 2.00 (= vac_cross) / out 1.10
+ in 0.35 / hold 3.50 (= vac_cross + vac_plateau) / out 1.10
 ```
 
-**The dwell is the transit.** `vac_hold` is written as `vac_cross`, not as
-2.0, and that is what gives the gesture a single apex: the far end of the path
-reaches full depth at `t₀ + vac_cross + vac_in` and the near end starts
-refilling at `t₀ + vac_in + vac_hold`, so at `vac_hold == vac_cross` those are
-the **same instant** — 3.350 s into the cycle. All four channels are at full
-depth for exactly that instant and no longer. The hole arrives everywhere just
-as it begins to leave.
+**The hold is the transit plus a plateau.** `vac_hold` is written as
+`vac_cross + vac_plateau` rather than as 3.50, because the two halves mean
+different things. The first `vac_cross` of it is the far end catching up: the
+near end opens at `t₀ + vac_in`, the far end only reaches full depth at
+`t₀ + vac_cross + vac_in`, and until then the hole is still *arriving*.
+Everything after that is `vac_plateau` — exactly the window in which the whole
+path is at full depth at once, 3.350 → 4.850 s into the cycle. At
+`vac_plateau` 0.0 that window collapses to a single instant (which is what the
+2.0 s version was); at 1.50 it is a state rather than an apex.
 
-What that costs is the travel. At the old 0.25 s hold the two pairs never
-overlapped at all; at 2 s they are off rest together for **1.45 s** (3.000 →
-4.450), so the hole is no longer a pair that crosses but a region that opens
-along the path and holds. The crossing is still in the attack — the four
-openings are still staggered 1.000 / 1.084 / 2.700 / 3.000 — but the gesture
-now spreads rather than travels. At this `vac_cross` it cannot be had both
-ways: keeping the pairs disjoint under a 2 s dwell would need `vac_cross`
-4.06 s, i.e. 1.6 m/s, which throws away the 2–3 m/s the capture measured.
+What it costs is the travel, and the bill is bigger than at 2.0 s. All four
+channels are off rest together for **2.95 s** (3.000 → 5.950), and after 3.350
+nothing is travelling at all — just four channels held under. The crossing
+survives only in the attack, where the openings are still staggered 1.000 /
+1.084 / 2.700 / 3.000. That is what a dwell this long *is*: the alternative
+isn't a longer hold with the crossing intact, it's a slower `vac_cross`, and
+the hall's measured 2–3 m/s doesn't want one.
 
 `vac_out` **was** fully derived: `vac_cross × (f₁₀ − f₅) − vac_in − vac_hold`,
 exactly long enough that the near pair was still coming back when the far pair
 opened, so the hole was never *nowhere*. At `vac_hold` 0.25 that resolved to
 1.10 s. Past a hold of 0.25 s the derivation only *shortens* the refill, and
 past 1.35 s it goes negative — not because the overlap failed but because the
-dwell now guarantees it outright. So 1.10 s is the floor (`vac_refill`): the
-refill keeps the length, and the ~3:1 ratio to the snatch, that the derivation
-gave it.
+dwell now guarantees it outright, holding the near pair open long after the far
+pair has opened. So 1.10 s is the floor (`vac_refill`): the refill keeps the
+length, and the ~3:1 ratio to the snatch, that the derivation gave it.
 
 The 1.1 s while the hole is between the hexagons was never a mistake — it is
 the 3 m of floor with no speaker on it, and a hole of finite width takes that
-long to cross it at 3.3 m/s. At a 2 s dwell that gap is no longer silent
-anyway: the near pair is still open when the far one arrives.
+long to cross it at 3.3 m/s. At this dwell the gap is not silent anyway: the
+near pair is still wide open when the far one arrives.
 
-**The whole gesture now spans 5.45 s** (1.000 → 6.450 into the cycle) where it
-spanned 3.70. On the desk's 32 s cycle the inhale's grains run to 14.575 s, so
-it finishes inside the phase it answers with 8.1 s to spare. At `xen_cycle_dur`
-16 the phase ends at 6.575 s and the margin is 0.125 s; shorter than that and
-the vacuum would still be refilling under `inhale_pause`, which is the one
-silence in the piece that should be empty.
+#### What the length costs the cycle
+
+**The gesture spans 6.95 s** (1.000 → 7.950 into the cycle) where the first
+build spanned 3.70. It has to finish inside the inhale, the phase it answers.
+The inhale's grains end at `cycle_dur / 2 − 1.425` (`m0_dur / 2 +
+inhale_pause + 0.035`), so:
+
+| `xen_cycle_dur` | inhale ends | vacuum ends | margin |
+|---|---|---|---|
+| 32.0 (the desk) | 14.575 s | 7.950 s | **+6.625 s** |
+| 18.75 (the floor) | 7.950 s | 7.950 s | 0.000 s |
+| 16.0 (library default) | 6.575 s | 7.950 s | **−1.375 s** |
+
+**The shortest cycle this dwell fits in is 18.75 s.** At 16 the refill runs
+past the end of the inhale and under `inhale_pause` — the one silence in the
+piece that is supposed to be empty, and the choreography's own suction. This is
+not raised: it is a muddied gesture, not a `TimingError`, and the studio may
+want to hear it anyway. But at a short cycle, `vac_plateau` is the first thing
+to give back.
 
 #### What it needs, and what it isn't
 
@@ -2133,8 +2147,8 @@ out again.
 
 > **Honest note.** Verified by arithmetic and by exercising the real lambda
 > under a shim: the four channels open at 1.000 / 1.084 / 2.700 / 3.000 s and
-> are back at rest by 6.450 s, all four at full depth for the single instant
-> 3.350 s, the
+> are back at rest by 5.950 / 6.034 / 7.650 / 7.950 s, with all four at full
+> depth together from 3.350 to 4.850 s, the
 > chain emits `amp` 0.75 → 0.187, `pitch` +12.53 → +7.49 and the bands
 > −9.07 / +6.05 dB, everything returns to rest, and the pitch stays inside
 > Sonic Pi's [−72, +24] validation. Nothing has been heard in the hall, and
