@@ -1959,10 +1959,10 @@ reason the gesture is a removal rather than a source.
 Every one of them is a `control` message on a node that already exists:
 
 1. **The duck** — the `tanh`'s own `amp`, which is post-saturation and linear
-   (§8f), down `vac_db` (−12 dB at `xen_vacuum` 1.0). Not the sample's `amp`:
+   (§8f), down `vac_db` (−22.8 dB at `xen_vacuum` 1.0). Not the sample's `amp`:
    the bed rotation writes that one every `rot_step` and the two would fight.
    M=0's fade already uses a `tanh` amp the same way.
-2. **The drop** — `pitch_slide` on the bed, `vac_semis` (−5 at 1.0). **Free
+2. **The drop** — `pitch_slide` on the bed, `vac_semis` (−9.5 at 1.0). **Free
    because of the bed overlap** (§8a): `bed_dur ≠ cycle_dur` put `PitchShift`
    permanently in circuit, so the shifter is already there and sliding it costs
    a message. It is applied *relative* to `bed_semis`, which is exactly the
@@ -1972,13 +1972,61 @@ Every one of them is a `control` message on a node that already exists:
    pitch would throw the compensation away and drop the bed an octave. It is
    exact only because every atmos slice is the same length — all 434 are
    16.000 s.
-3. **The tilt** — Blauert's pair **inverted**: −9 dB at 8372 Hz and +6 dB at
-   3136 Hz is the "above" chord read backwards, i.e. behind and below.
+3. **The tilt** — Blauert's pair **inverted** and multiplied by `vac_tilt`
+   (1.9): −17.1 dB at 8372 Hz and +11.4 dB at 3136 Hz, the "above" chord read
+   backwards and then some.
 
 The only cost is cue 3: two `band_eq` nodes on four channels, instantiated flat
 and slid later. This is the one place the piece can't use its "skip at 0 dB"
 rule — there's nothing to skip to when the value arrives two seconds after the
 node does — and they exist only while `xen_vacuum` is up.
+
+#### The depths were raised ×1.9 (2026-09-18)
+
+The first build was −12.0 dB, −5.0 semitones and a flat 1.0 of the Blauert
+chord, and it was not enough. All three scale off `xen_vacuum` together, so
+what changed is what **1.0 means**; the desk keeps its 0.8 and gets 1.9 times
+the gesture it had:
+
+| at the desk's 0.8 | was | now |
+|---|---|---|
+| duck | −9.6 dB (33 % of level) | **−18.2 dB** (12 %) |
+| drop | −4.0 semitones | **−7.6** |
+| tilt | −7.2 / +4.8 dB | **−13.7 / +9.1 dB** |
+
+**They do not all deliver the same way**, which matters before reaching for
+more:
+
+- **`vac_db` delivers nearly all of it, and is closest to its own ceiling.** A
+  hole is a hole: past about −20 dB there is nothing left to remove and deeper
+  stops reading as deeper. At −22.8 the bed on those channels is at 7 % of its
+  level, i.e. gone.
+- **`vac_semis` delivers all of it and costs nothing.** Counter-intuitively it
+  gets *cleaner* as it grows: the bed sits at +12.53 semitones of stretch
+  compensation, so `PitchShift` is running an octave up (ratio 2.06), and
+  dragging it to +3.03 moves the shifter *toward* unity (1.19). The deeper the
+  drop, the fewer artefacts during it.
+- **`vac_tilt` delivers least.** §10c measured this on the M=0 scalpel: +9 dB
+  of extra Blauert EQ bought **+3.07 dB** of actual 8k-to-3k contrast, because
+  the pair sits inside the `tanh` and a saturator compresses spectral contrast
+  exactly as it compresses dynamic contrast. Expect about a third of what the
+  number says. It also costs timbre — +11.4 dB at 3136 Hz on a bed with 81.5 %
+  of its energy in 125–500 Hz is audible as *honk* before it is audible as
+  height — so this is the first one to back off if the vacuum starts sounding
+  like a wah pedal rather than a hole.
+
+One interaction worth knowing: the boost is upstream of the `tanh` and the duck
+is downstream of it, so during the gesture the saturator is driven harder while
+its output is pulled down. The bed gets a little more crunch as it is dragged
+under. On this material and at these levels that is slight, and it suits a
+sound that is supposed to be straining.
+
+**If ×1.9 still isn't enough**, the levers that have not been touched are
+*width* (four channels of twelve are on the path — `vac_path` could take 1, 4,
+7, 11 and make the hole physically bigger), *snatch* (`vac_in` 0.35 s — the
+suddenness of the removal is probably the single biggest "feel" lever left),
+and *dwell* (`vac_hold` 0.25 s). Those change the gesture's shape rather than
+its size, so they are a separate decision from turning it up.
 
 **This is the only place in the piece that voices anything under the speaker
 plane.** `breath_tilt` deliberately clamps at it, and the comment there calls
@@ -2030,9 +2078,10 @@ to cross it at 3.3 m/s.
 #### Tuning it, and the one thing to watch
 
 `xen_vacuum` scales all three cues together, so they can't drift apart: 0.8 on
-the desk, 0 to disable. If it needs to be deeper, `vac_db` before `vac_semis` —
-level reads as absence, pitch reads as effort. If it reads as a swell rather
-than a suck, `vac_in` is too slow.
+the desk, 0 to disable. After the ×1.9 raise, `vac_db` is close to done (see
+above) and `vac_semis` is the one with room left — level reads as absence,
+pitch reads as effort. If it reads as a swell rather than a suck, `vac_in` is
+too slow.
 
 **Don't let it grow.** The choreography's suction already exists: `inhale_pause`
 — 1.165 s of silence before the burst — is commented as exactly that, "the
@@ -2045,8 +2094,9 @@ Deep enough to read as a gust, not deep enough to read as the piece dropping
 out again.
 
 > **Honest note.** Verified by arithmetic and by exercising the real lambda
-> under a shim: the four channels open at 1.000 / 1.084 / 2.700 / 3.000 s, amp
-> and pitch and both bands all return to rest, and the pitch stays inside
+> under a shim: the four channels open at 1.000 / 1.084 / 2.700 / 3.000 s, the
+> chain emits `amp` 0.75 → 0.092, `pitch` +12.53 → +4.93 and the bands
+> −13.68 / +9.12 dB, everything returns to rest, and the pitch stays inside
 > Sonic Pi's [−72, +24] validation. Nothing has been heard in the hall, and
 > every number above is a starting point, not a measurement.
 

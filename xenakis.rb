@@ -523,8 +523,38 @@ vac_hold  = 0.25       # how long it stays open
 # nowhere. Any faster and the gesture reads as two ducks instead of one thing
 # crossing. The floor is for a vac_cross short enough to make this negative.
 vac_out   = [vac_cross * (vac_path[2][1] - vac_path[0][1]) - vac_in - vac_hold, 0.4].max
-vac_db    = -12.0      # how deep the hole is at xen_vacuum 1.0
-vac_semis = -5.0       # and how far the material is dragged down with it
+#
+# THE DEPTHS WERE RAISED x1.9 ON 2026-09-18 - the first build was -12.0 dB,
+# -5.0 semitones and a flat 1.0 of the Blauert chord, and it was not enough.
+# All three scale together off xen_vacuum, so what changes here is what 1.0
+# MEANS; the desk keeps its 0.8 and gets 1.9 times the gesture it had.
+#
+# They do not all deliver the same way, and it is worth knowing which is which
+# before reaching for more:
+#
+#   vac_db     delivers nearly all of it, and is closest to its own ceiling.
+#              A hole is a hole: past about -20 dB there is nothing left to
+#              remove, and deeper stops reading as deeper. At -22.8 the bed on
+#              those channels is 7% of its level, i.e. gone.
+#   vac_semis  delivers all of it and costs nothing. Counter-intuitively it
+#              gets CLEANER as it grows: the bed sits at +12.53 semitones of
+#              stretch compensation, so PitchShift is running an octave up,
+#              and dragging it down to +3.03 moves the shifter TOWARD unity.
+#              The deeper the drop, the fewer artefacts during it.
+#   vac_tilt   delivers least. README 10c measured it on the M=0 scalpel:
+#              +9 dB of extra Blauert EQ bought +3.07 dB of actual 8k-to-3k
+#              contrast, because the pair sits inside the tanh and a saturator
+#              compresses spectral contrast exactly as it compresses dynamic
+#              contrast. Expect about a third of what the number says. It also
+#              costs timbre - +11.4 dB at 3136 Hz on a bed with 81.5% of its
+#              energy in 125-500 Hz is audible as honk before it is audible as
+#              height - so this is the first one to back off if the vacuum
+#              starts sounding like a wah pedal rather than a hole.
+vac_db    = -22.8      # how deep the hole is at xen_vacuum 1.0 (was -12.0)
+vac_semis = -9.5       # how far the material is dragged down with it (was -5.0)
+vac_tilt  = 1.9        # the below-cue, in multiples of the piece's own Blauert
+                       # chord: 1.0 would be M=0's +9/-6 read backwards, and
+                       # this is that chord and then some (was a flat 1.0)
 
 # 0b. RE-SCALING A GESTURE OVER A SMALLER RIG
 # count positions distributed over n outputs, wrapping in a circle, so every
@@ -1473,8 +1503,8 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
               sleep lead + spill_into + vac_when[ch] * vac_cross
               control tanh_fx, amp: out_trim * vac_gain, amp_slide: vac_in
               control bed, pitch: bed_semis + vac_semis * vac_amt, pitch_slide: vac_in
-              control eq_hi, db: -blauert_hi_db * vac_amt, db_slide: vac_in
-              control eq_lo, db: -blauert_lo_db * vac_amt, db_slide: vac_in
+              control eq_hi, db: -blauert_hi_db * vac_tilt * vac_amt, db_slide: vac_in
+              control eq_lo, db: -blauert_lo_db * vac_tilt * vac_amt, db_slide: vac_in
               sleep vac_in + vac_hold
               control tanh_fx, amp: out_trim,  amp_slide: vac_out
               control bed, pitch: bed_semis,   pitch_slide: vac_out
