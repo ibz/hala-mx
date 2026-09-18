@@ -2029,9 +2029,10 @@ sound that is supposed to be straining.
 untouched levers are *width* (four channels of twelve are on the path —
 `vac_path` could take 1, 4, 7, 11 and make the hole physically bigger),
 *snatch* (`vac_in` 0.35 s — the suddenness of the removal is probably the
-single biggest "feel" lever left), and *dwell* (`vac_hold` 0.25 s). Those
-change the gesture's shape rather than its size, so they are a separate
-decision from turning it up.
+single biggest "feel" lever left). *Dwell* has since been spent: `vac_hold`
+went 0.25 s → 2.0 s on 2026-09-18 (see *The shape*). Those change the
+gesture's shape rather than its size, so they are a separate decision from
+turning it up.
 
 **This is the only place in the piece that voices anything under the speaker
 plane.** `breath_tilt` deliberately clamps at it, and the comment there calls
@@ -2041,23 +2042,56 @@ vacuum is not the breath's path, it's what the breath is being pulled into.
 #### The shape
 
 ```
- ch 5-6    ___          in 0.35 / hold 0.25 / out 1.10
-              \___..---
- ch 9-10          ___
-                     \___..---
-           ^1.0s  ^1.6   ^2.7      the near pair is still refilling
-                                   when the far pair opens
+ ch 5-6    ___
+              \___________________..-------
+ ch 9-10   ___________________
+                              \___________________..-------
+              ^1.000          ^3.000      ^4.450          ^6.450
+               near pair       far pair    near pair       all four
+               opens           opens       refilled        at rest
+                                 ^ 3.350: all four at full depth,
+                                   for that one instant
+
+ in 0.35 / hold 2.00 (= vac_cross) / out 1.10
 ```
 
-`vac_out` is **derived, not chosen**: `vac_cross × (f₁₀ − f₅) − vac_in −
-vac_hold` = 1.10 s, exactly long enough that the near pair is still coming back
-when the far pair opens, so the hole is never *nowhere*. Any faster and the
-gesture reads as two ducks rather than one thing crossing. Change `vac_cross`
-and the overlap stays correct.
+**The dwell is the transit.** `vac_hold` is written as `vac_cross`, not as
+2.0, and that is what gives the gesture a single apex: the far end of the path
+reaches full depth at `t₀ + vac_cross + vac_in` and the near end starts
+refilling at `t₀ + vac_in + vac_hold`, so at `vac_hold == vac_cross` those are
+the **same instant** — 3.350 s into the cycle. All four channels are at full
+depth for exactly that instant and no longer. The hole arrives everywhere just
+as it begins to leave.
 
-The 1.1 s while the hole is between the hexagons is not a mistake — it is the
-3 m of floor with no speaker on it, and a hole of finite width takes that long
-to cross it at 3.3 m/s.
+What that costs is the travel. At the old 0.25 s hold the two pairs never
+overlapped at all; at 2 s they are off rest together for **1.45 s** (3.000 →
+4.450), so the hole is no longer a pair that crosses but a region that opens
+along the path and holds. The crossing is still in the attack — the four
+openings are still staggered 1.000 / 1.084 / 2.700 / 3.000 — but the gesture
+now spreads rather than travels. At this `vac_cross` it cannot be had both
+ways: keeping the pairs disjoint under a 2 s dwell would need `vac_cross`
+4.06 s, i.e. 1.6 m/s, which throws away the 2–3 m/s the capture measured.
+
+`vac_out` **was** fully derived: `vac_cross × (f₁₀ − f₅) − vac_in − vac_hold`,
+exactly long enough that the near pair was still coming back when the far pair
+opened, so the hole was never *nowhere*. At `vac_hold` 0.25 that resolved to
+1.10 s. Past a hold of 0.25 s the derivation only *shortens* the refill, and
+past 1.35 s it goes negative — not because the overlap failed but because the
+dwell now guarantees it outright. So 1.10 s is the floor (`vac_refill`): the
+refill keeps the length, and the ~3:1 ratio to the snatch, that the derivation
+gave it.
+
+The 1.1 s while the hole is between the hexagons was never a mistake — it is
+the 3 m of floor with no speaker on it, and a hole of finite width takes that
+long to cross it at 3.3 m/s. At a 2 s dwell that gap is no longer silent
+anyway: the near pair is still open when the far one arrives.
+
+**The whole gesture now spans 5.45 s** (1.000 → 6.450 into the cycle) where it
+spanned 3.70. On the desk's 32 s cycle the inhale's grains run to 14.575 s, so
+it finishes inside the phase it answers with 8.1 s to spare. At `xen_cycle_dur`
+16 the phase ends at 6.575 s and the margin is 0.125 s; shorter than that and
+the vacuum would still be refilling under `inhale_pause`, which is the one
+silence in the piece that should be empty.
 
 #### What it needs, and what it isn't
 
@@ -2098,7 +2132,9 @@ Deep enough to read as a gust, not deep enough to read as the piece dropping
 out again.
 
 > **Honest note.** Verified by arithmetic and by exercising the real lambda
-> under a shim: the four channels open at 1.000 / 1.084 / 2.700 / 3.000 s, the
+> under a shim: the four channels open at 1.000 / 1.084 / 2.700 / 3.000 s and
+> are back at rest by 6.450 s, all four at full depth for the single instant
+> 3.350 s, the
 > chain emits `amp` 0.75 → 0.187, `pitch` +12.53 → +7.49 and the bands
 > −9.07 / +6.05 dB, everything returns to rest, and the pitch stays inside
 > Sonic Pi's [−72, +24] validation. Nothing has been heard in the hall, and
