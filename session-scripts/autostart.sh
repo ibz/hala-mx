@@ -7,14 +7,23 @@
 #
 #   1. PipeWire has to be up for THIS user. It is a user service started around
 #      the same time we are, so on a cold login we can easily win the race.
-#   2. The Focusrite has to have enumerated. USB audio interfaces take a few
-#      seconds after the session starts, and --production ABORTS rather than
+#   2. The INTERFACE has to have enumerated. USB audio interfaces take a few
+#      seconds after the session starts, and the venue modes ABORT rather than
 #      starting under-routed (which is correct - it just needs to be given the
 #      chance).
 #
 # So: wait for the sink to appear, then hand over. If it never appears we still
 # run start-46.sh, because its own error message is better than anything this
 # script could invent, and it lands in the log below.
+#
+# WHICH sink to wait for depends on the mode, and waiting for the wrong one
+# just burns the full 60 s before handing over anyway - so it is resolved from
+# the mode below rather than hard coded to the hall's Focusrite.
+#
+# --tnb's FIRST run cannot happen here. It has to establish the interface by
+# ear, which means a terminal and somebody listening; from autostart it will
+# refuse with that message in the log. Run `./start-46.sh --tnb` by hand once
+# at the venue, and every login after that is unattended like the others.
 #
 # Everything goes to $LOG - a desktop session has nowhere to print.
 set -uo pipefail
@@ -31,14 +40,34 @@ exec >>"$LOG" 2>&1
 echo "=== autostart $(date '+%F %T') mode=$MODE ==="
 
 FOCUSRITE_RE='alsa_output\.usb-Focusrite_Scarlett_18i20_USB_[^.]+-00\.pro-output-0'
-for i in $(seq 60); do            # up to 60 s, checked every second
-  if pactl list short sinks 2>/dev/null | grep -qE "$FOCUSRITE_RE"; then
-    echo "Focusrite present after ${i}s"
-    break
-  fi
-  [ "$i" = 60 ] && echo "WARNING: no Focusrite sink after 60s - handing over anyway"
-  sleep 1
-done
+UMC_RE='alsa_output\.usb-BEHRINGER_UMC404HD_192k-00\.pro-output-0'
+
+case " $MODE " in
+  *" --tnb "*)
+    WANT="TNB's interface"
+    # From the saved config, if there is one. An unconfigured TNB has nothing
+    # to wait for - hand straight over and let start-46.sh say so properly.
+    conf=$("$HERE/tnb-configure.sh" --path 2>/dev/null)
+    SINK_RE=$(sed -n "s/^TNB_SINK='\(.*\)'$/\1/p" "$conf" 2>/dev/null | head -1 \
+              | sed 's/[][\.*^$+?(){}|]/\\&/g')
+    [ -n "$SINK_RE" ] || { WANT=""; echo "TNB is not configured yet - not waiting"; }
+    ;;
+  *" --simulation "*|*" --sim "*|*" -s "*|*" --tnb-simulation "*|*" --tnb-sim "*)
+    WANT="the UMC404HD"; SINK_RE="$UMC_RE" ;;
+  *)
+    WANT="the Focusrite"; SINK_RE="$FOCUSRITE_RE" ;;
+esac
+
+if [ -n "$WANT" ]; then
+  for i in $(seq 60); do            # up to 60 s, checked every second
+    if pactl list short sinks 2>/dev/null | cut -f2 | grep -qE "^$SINK_RE$"; then
+      echo "$WANT present after ${i}s"
+      break
+    fi
+    [ "$i" = 60 ] && echo "WARNING: no sink for $WANT after 60s - handing over anyway"
+    sleep 1
+  done
+fi
 
 echo "exec start-46.sh $MODE"
 exec "$HERE/start-46.sh" $MODE

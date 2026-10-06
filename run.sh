@@ -13,7 +13,13 @@
 #   ./run.sh 8      a partially patched rig - state the real output count
 #   ./run.sh --keep launch with whatever Buffer 0 already had
 #
-# For the studio rig use session-scripts/start-46.sh --simulation instead.
+# This is Hala MX's name only. The other venues and the studio get said out
+# loud, because there is nothing about this command that could tell them
+# apart:
+#
+#   session-scripts/start-46.sh --tnb              TNB, 8 outputs
+#   session-scripts/start-46.sh --simulation       the studio rig
+#   session-scripts/start-46.sh --tnb-simulation   the studio rig, rehearsing TNB
 set -uo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
 exec "$HERE/session-scripts/start-46.sh" --production "$@"

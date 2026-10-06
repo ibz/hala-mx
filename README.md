@@ -33,14 +33,28 @@ declared in the header, no separate venv needed: `./grains_slice.py`,
   destroys the running job on a 5% device dip; see §7a for the measurements.
   Build with `./session-scripts/build-sonicpi-46.sh`.
 - **Launch with `./session-scripts/start-46.sh <mode>`**, not the binary
-  directly, and **the mode is required** — `--production` for Hala MX (12
-  outputs, bleep off) or `--simulation` for the studio (4 outputs on the
-  UMC404HD, bleep on). It sets `SC_JACK_DEFAULT_OUTPUTS` so all outputs land on
-  the interface rather than the built-in speakers (§7d), writes the venue's rig
-  and bleep into Buffer 0, and sets `num_outputs` in `audio-settings.toml` to
-  match. There is no default mode on purpose: both differences are silent when
+  directly, and **the mode is required**:
+
+  | mode | venue | outputs | interface | bleep |
+  |---|---|---|---|---|
+  | `--production` | Hala MX | 12 | Focusrite 18i20 | off |
+  | `--tnb` | TNB | 8 | established by ear on first run (§7e) | off |
+  | `--simulation` | studio | 4 | UMC404HD | on |
+  | `--tnb-simulation` | studio | 4 | UMC404HD | on |
+
+  It sets `SC_JACK_DEFAULT_OUTPUTS` so all outputs land on the interface rather
+  than the built-in speakers (§7d), writes the venue's rig and bleep into
+  Buffer 0, and sets `num_outputs` in `audio-settings.toml` to match. There is
+  no default mode on purpose: every difference in that table is silent when
   wrong, and a bleep in front of an audience is not recoverable. It also
   **reaps a previous session's backend** before launching — see below.
+
+  The two studio rows are deliberately identical: the studio has one interface,
+  and the 4-output stand-in for an 8-channel room is the same stand-in as for a
+  12-channel one. They are separate names because the mode is what you say out
+  loud about what you are rehearsing. The venue modes (`--production`, `--tnb`)
+  **abort** when the rig is under-routed; the studio modes degrade with a
+  warning.
 - **The desk has a hard size ceiling of 16320 bytes, and going past it makes
   Run do nothing at all.** Pressing Run sends the *whole buffer* to the runtime
   as one OSC string argument (`/run-code`, `spider-server.rb:286`), and the
@@ -1224,10 +1238,12 @@ daemon.rb's 5 s timer, tears down whatever links exist, and repatches
 for both mechanisms.
 
 ```sh
-./session-scripts/start-46.sh --simulation   # studio: 4 outputs on the UMC404HD
-./session-scripts/start-46.sh --production   # hall: 12 outputs on the Focusrite 18i20
-./session-scripts/start-46.sh --simulation 2  # a laptop's built-in stereo
-./session-scripts/start-46.sh --production 8  # a partially patched hall rig
+./session-scripts/start-46.sh --simulation      # studio: 4 outputs on the UMC404HD
+./session-scripts/start-46.sh --tnb-simulation  # studio: same rig, TNB rehearsal
+./session-scripts/start-46.sh --production      # hall: 12 outputs on the Focusrite 18i20
+./session-scripts/start-46.sh --tnb             # TNB: 8 outputs, saved interface (§7e)
+./session-scripts/start-46.sh --simulation 2    # a laptop's built-in stereo
+./session-scripts/start-46.sh --production 8    # a partially patched hall rig
 ```
 
 **Production's interface is the Scarlett 18i20, found by name pattern** —
@@ -1348,7 +1364,59 @@ against `monitors.tsv`, in order. Write the confirmed mapping down once
 verified; until then, treat any AUX-to-jack table as a hypothesis, not a
 fact — the one above only became trustworthy after exactly this test.
 
-### 7e. Verify
+### 7e. TNB — the venue whose interface is not known in advance
+
+Everything in 7d names its interface in the script: the UMC by node name, the
+Focusrite by name pattern, and both port maps confirmed by ear before they were
+written down. **TNB's rack was unknown when `--tnb` was written**, so there was
+nothing to hard code — and guessing it is precisely the failure this whole
+section exists to prevent.
+
+So `--tnb` asks once, the first time it runs, and never again. It hands over to
+`session-scripts/tnb-configure.sh`, which walks the three things that were
+actually wrong at Hala MX before somebody put a tone on each jack:
+
+1. **The ALSA profile.** A multichannel USB interface usually boots in a
+   consumer HiFi profile and presents a handful of stereo sinks rather than one
+   multichannel node; only `pro-audio` exposes the discrete `playback_AUX*`
+   ports. The script offers the switch, records it, and `start-46.sh`
+   re-applies it every run — nothing guarantees it survived a power cycle.
+2. **The port order.** PipeWire's "Line Output N+M" labels are an ACP guess,
+   and a natural sort of the port names is only a guess too. On the 18i20 the
+   first 12 AUX ports would have put four channels of the piece into a
+   headphone socket. So it plays a rising chime down one candidate port at a
+   time and waits to be told what was heard; the order can be answered as a
+   range (`1-8`), a split range (`1-8,13-16`), or any permutation (`3,1,2,4`).
+3. **The interface's own routing matrix.** The 18i20 needed `amixer` work that
+   PipeWire could not see at all. The script cannot know the equivalent on a
+   card it has never met, and does not pretend to — but a channel that stays
+   silent through the sweep is what tells you to go and look at that layer.
+
+The answer lands in `~/.config/hala-mx/tnb-card.conf` (override with
+`$HALA_TNB_CONF`). It is machine-local rather than checked in, because
+`TNB_SINK` embeds that interface's USB serial — it describes one physical rack,
+not the piece.
+
+```sh
+./session-scripts/start-46.sh --tnb                # first run configures, then launches
+./session-scripts/start-46.sh --tnb --reconfigure  # the rack changed — redo it by ear
+./session-scripts/tnb-configure.sh --show          # what was saved
+./session-scripts/tone-test.sh --sink <node>       # re-check a port map any time
+```
+
+`TNB_PORTS` is stored **in channel order** and is replayed verbatim — it is
+never re-derived, because that order came out of somebody listening to a tone
+move round the room and exists nowhere in the graph. `TNB_OUTPUTS` likewise
+wins over the mode's own default of 8: the number in the file is one that was
+confirmed in the room, and refusing to start against a figure nobody has
+re-checked would be the wrong way round. A number on the command line still
+overrides both.
+
+The first run **cannot happen from autostart** — it needs a terminal and
+somebody listening, and will say so in the log. Run `--tnb` by hand once at the
+venue; every login after that is unattended like the others.
+
+### 7f. Verify
 
 ```sh
 pgrep -a scsynth                    # want -i 0 -o 4 -S 48000
@@ -2317,7 +2385,10 @@ output_xenakis_installation/       generated, not checked into git
   m0_render/                        output of render_m0.py
 session-scripts/                   build + launch + audio helpers
   build-sonicpi-46.sh              builds Sonic Pi 4.6.0 (deps|clone|build|clean|all)
-  start-46.sh                      --production | --simulation: desk, routing, launch
+  start-46.sh                      --production | --tnb | --simulation | --tnb-simulation:
+                                     desk, routing, launch
+  tnb-configure.sh                 establishes TNB's interface by ear, once (§7e)
+  tone-test.sh                     a chime down one output port at a time, to confirm by ear
   link-outs.sh                     repatches scsynth onto the interface (start-46 calls it)
   check-session.sh                 is it healthy right now? (delivery, not settings)
   setup-audio.sh                   5.0-era PipeWire pinning; REFUSES to run on a 4.6 setup

@@ -3,23 +3,46 @@
 # start-46.sh - launch Sonic Pi 4.6.0 for a stated venue, with output routed to
 # the right interface and the checked-in desk installed.
 #
-#   ./start-46.sh --production     Hala MX: 12 outputs on the Focusrite 18i20, bleep OFF
-#   ./start-46.sh --simulation     studio:   4 outputs on the UMC404HD, bleep ON
+#   ./start-46.sh --production       Hala MX: 12 outputs, Focusrite 18i20, bleep OFF
+#   ./start-46.sh --tnb              TNB:      8 outputs, saved interface,  bleep OFF
+#   ./start-46.sh --simulation       studio:   4 outputs, UMC404HD,         bleep ON
+#   ./start-46.sh --tnb-simulation   studio:   4 outputs, UMC404HD,         bleep ON
 #
-#   --keep        launch with whatever Buffer 0 already had (no desk install)
-#   <number>      override the output count for this run:
-#                   --simulation 2   work on a laptop's built-in stereo
-#                   --production 8   a partially patched hall rig
-#                 Without a number, --simulation DEGRADES to whatever the sink
-#                 actually has (with a warning) while --production ABORTS - a
-#                 concert must not start silently under-routed, a desk session
-#                 should just work.
+#   --keep          launch with whatever Buffer 0 already had (no desk install)
+#   --reconfigure   --tnb only: redo the interface setup before launching
+#   <number>        override the output count for this run:
+#                     --simulation 2   work on a laptop's built-in stereo
+#                     --production 8   a partially patched hall rig
+#                   Without a number the STUDIO modes (--simulation,
+#                   --tnb-simulation) DEGRADE to whatever the sink actually
+#                   has, with a warning, while the VENUE modes (--production,
+#                   --tnb) ABORT - a concert must not start silently
+#                   under-routed, a desk session should just work.
 #
-# THE MODE IS REQUIRED, deliberately. The two venues differ in ways that are
-# silent when wrong - 12 vs 4 outputs changes how the spatial drawing folds,
-# and the reference bleep belongs in the studio and nowhere near an audience -
-# so the venue gets said out loud rather than inherited from whatever the last
+# THE MODE IS REQUIRED, deliberately. The venues differ in ways that are silent
+# when wrong - 12 vs 8 vs 4 outputs changes how the spatial drawing folds, and
+# the reference bleep belongs in the studio and nowhere near an audience - so
+# the venue gets said out loud rather than inherited from whatever the last
 # session happened to leave behind.
+#
+# THE TWO STUDIO MODES ARE THE SAME RIG, and that is not an oversight. Both put
+# 4 outputs on the UMC404HD with the bleep on, because the studio has one
+# interface and the stand-in for an 8-channel room is the same stand-in as for
+# a 12-channel one. They are separate names because the mode is the thing you
+# say out loud about what you are rehearsing, and "I am on --tnb-simulation"
+# carries that where "--simulation" does not. It also gives TNB somewhere to
+# diverge later without a second rewrite of the argument parser.
+#
+# --tnb IS THE ONE MODE THAT DOES NOT KNOW ITS INTERFACE. Hala MX's two cards
+# are named in this file - the Focusrite by pattern, the UMC by node name - and
+# both have had their port maps confirmed by ear. TNB's rack was unknown when
+# this was written, so there is nothing to hard code and guessing would be the
+# one failure this script exists to prevent. Instead the first --tnb run hands
+# over to tnb-configure.sh, which picks the card, sets its ALSA profile, plays
+# a tone down each candidate port and waits to be told what was heard. What
+# comes back is written to a machine-local config file and used verbatim from
+# then on, so the asking happens exactly once. See tnb-configure.sh's header
+# for why each of those three steps is there.
 #
 # WHY THIS EXISTS AT ALL: on Linux, scsynth's -H (sound_card_name in the toml)
 # is the JACK SERVER name, not a device - it cannot select the interface, and
@@ -126,20 +149,116 @@ fix_focusrite_adat_routing() {
   done
 }
 
+# --- TNB's interface, as confirmed by ear and written down ------------------
+#
+# Sets SINK and TNB_PORTS from the saved config, running the interactive setup
+# first if there is nothing saved yet (or if --reconfigure says to redo it).
+#
+# The config is read, never re-derived. Its port list is in CHANNEL ORDER, and
+# that order came out of somebody listening to a tone move round the room - it
+# is not recoverable from the graph, where the ports are just names in
+# whatever order pw-link feels like emitting them. The Focusrite branch below
+# can get away with deriving its list because that derivation has itself been
+# checked by ear; for TNB the listening IS the source.
+#
+# The ALSA profile is re-applied every run for the same reason the Focusrite's
+# ADAT matrix is: nothing guarantees it survived a power cycle, a WirePlumber
+# upgrade, or somebody else's afternoon with the machine.
+tnb_load() {
+  local conf cur
+  conf=$("$HERE/tnb-configure.sh" --path 2>/dev/null)
+  [ -n "$conf" ] || { echo "cannot find tnb-configure.sh - is session-scripts/ intact?"; exit 1; }
+
+  if [ "$RECONFIG" = 1 ] || [ ! -r "$conf" ]; then
+    if [ "$RECONFIG" = 1 ]; then
+      echo "--reconfigure: redoing TNB's interface setup."
+    else
+      echo "TNB has not been configured on this machine yet."
+      echo "  No interface is hard coded for TNB, so it gets established once, by"
+      echo "  ear, and saved. This takes a couple of minutes and needs the rig"
+      echo "  patched and audible."
+    fi
+    echo
+    "$HERE/tnb-configure.sh" -n "$N" || {
+      echo
+      echo "TNB is not configured - not launching."
+      echo "  Run the setup again when the rig is ready:"
+      echo "      $HERE/tnb-configure.sh"
+      exit 1; }
+    echo
+  fi
+
+  # shellcheck source=/dev/null
+  . "$conf" || { echo "cannot read $conf"; exit 1; }
+  for k in TNB_SINK TNB_PORTS TNB_CARD TNB_PROFILE; do
+    [ -n "${!k:-}" ] || { echo "$conf is missing $k - re-run with --reconfigure"; exit 1; }
+  done
+
+  # The saved count WINS over the mode's default. 8 is only the number the
+  # first configuration is seeded with; if the file says something else, that
+  # came out of somebody standing in the room counting speakers, and refusing
+  # to start against a figure nobody has re-confirmed would be the wrong way
+  # round. A number on the command line still overrides both, as it does
+  # everywhere else here.
+  if [ -n "${TNB_OUTPUTS:-}" ] && [ "$TNB_OUTPUTS" != "$N" ]; then
+    if [ "$N_EXPLICIT" = 1 ]; then
+      echo "NOTE: TNB is configured for $TNB_OUTPUTS outputs; this run was told $N."
+    else
+      echo "TNB is configured for $TNB_OUTPUTS outputs, not the usual $N - using $TNB_OUTPUTS."
+      N="$TNB_OUTPUTS"
+    fi
+  fi
+
+  # Idempotent, and quiet when it is already right.
+  cur=$(pactl list cards 2>/dev/null \
+    | awk -v c="$TNB_CARD" '$1=="Name:" && $2==c {f=1; next}
+                            f && $1=="Active" && $2=="Profile:" {print $3; exit}')
+  if [ -z "$cur" ]; then
+    echo "WARNING: TNB's card is not present: $TNB_CARD"
+  elif [ "$cur" != "$TNB_PROFILE" ]; then
+    echo "TNB card profile: $cur -> $TNB_PROFILE"
+    pactl set-card-profile "$TNB_CARD" "$TNB_PROFILE" \
+      || echo "WARNING: could not set it - the ports below may be wrong"
+    # Switching profiles tears the sinks down and rebuilds them; asking for
+    # ports before the graph settles returns a short list or none at all.
+    sleep 1
+  fi
+
+  if ! pactl list short sinks 2>/dev/null | cut -f2 | grep -qx "$TNB_SINK"; then
+    echo "ABORT: TNB's interface is not in the graph."
+    echo "       expected: $TNB_SINK"
+    echo "       Plug it in, or if the rack has changed, redo the setup:"
+    echo "           ./start-46.sh --tnb --reconfigure"
+    exit 1
+  fi
+  SINK="$TNB_SINK"
+
+  # If TNB's rack turns out to contain an 18i20, its internal routing matrix
+  # needs the same amixer fix production does - that trap belongs to the card,
+  # not to the hall it happens to be standing in.
+  if [[ "$SINK" =~ $FOCUSRITE_RE ]]; then
+    echo "Focusrite ADAT routing (its own internal matrix, separate from PipeWire):"
+    fix_focusrite_adat_routing
+  fi
+}
+
 usage() {
-  sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-1}"
 }
 
-MODE=""; KEEP=0; N=""
+MODE=""; KEEP=0; N=""; RECONFIG=0; N_EXPLICIT=0
 for arg in "$@"; do
   case "$arg" in
-    --production|--prod|-p)   MODE=production ;;
-    --simulation|--sim|-s)    MODE=simulation ;;
-    --keep|--keep-workspace)  KEEP=1 ;;
-    -h|--help)                usage 0 ;;
-    ''|*[!0-9]*)              echo "unknown argument: $arg"; echo; usage 1 ;;
-    *)                        N="$arg" ;;
+    --production|--prod|-p)          MODE=production ;;
+    --simulation|--sim|-s)           MODE=simulation ;;
+    --tnb)                           MODE=tnb ;;
+    --tnb-simulation|--tnb-sim)      MODE=tnb-simulation ;;
+    --reconfigure|--reconfig)        RECONFIG=1 ;;
+    --keep|--keep-workspace)         KEEP=1 ;;
+    -h|--help)                       usage 0 ;;
+    ''|*[!0-9]*)                     echo "unknown argument: $arg"; echo; usage 1 ;;
+    *)                               N="$arg"; N_EXPLICIT=1 ;;
   esac
 done
 
@@ -147,13 +266,21 @@ if [ -z "$MODE" ]; then
   echo "no mode given - say which venue this is."; echo
   usage 1
 fi
-
-# The venue profile. Only two things differ, but both are silent when wrong.
-if [ "$MODE" = production ]; then
-  N="${N:-12}"; BLEEP=false
-else
-  N="${N:-4}";  BLEEP=true
+if [ "$RECONFIG" = 1 ] && [ "$MODE" != tnb ]; then
+  echo "--reconfigure only means something with --tnb: the other modes' interfaces"
+  echo "are named in this script, not discovered."; echo
+  usage 1
 fi
+
+# The venue profile. Three things differ, and all three are silent when wrong:
+# how many outputs the drawing folds onto, whether the reference bleep is
+# audible, and - VENUE - whether an under-routed rig is a warning or a refusal.
+case "$MODE" in
+  production)      N="${N:-12}"; BLEEP=false; VENUE=1 ;;
+  tnb)             N="${N:-8}";  BLEEP=false; VENUE=1 ;;
+  simulation)      N="${N:-4}";  BLEEP=true;  VENUE=0 ;;
+  tnb-simulation)  N="${N:-4}";  BLEEP=true;  VENUE=0 ;;
+esac
 echo "MODE: $MODE  ($N outputs, bleep $BLEEP)"
 echo
 
@@ -269,7 +396,16 @@ fi
 # desk claiming 12 over an 8-port graph draws into channels that do not exist.
 # Resolving here means the install below writes the real number.
 FOCUSRITE=$(pactl list short sinks 2>/dev/null | cut -f2 | grep -E "$FOCUSRITE_RE" | head -1)
-if [ "$MODE" = simulation ] && pw-link -i 2>/dev/null | grep -q "^$UMC:playback_"; then
+TNB_PORTS=""
+if [ "$MODE" = tnb ]; then
+  # Sets SINK and TNB_PORTS, or exits. Unlike every other branch here it may
+  # stop and talk to the operator - see tnb_load above.
+  tnb_load
+elif { [ "$MODE" = simulation ] || [ "$MODE" = tnb-simulation ]; } \
+     && pw-link -i 2>/dev/null | grep -q "^$UMC:playback_"; then
+  # Both studio modes are the UMC. Same argument as the Focusrite below: when
+  # the studio interface is present it is always the right answer, whatever
+  # WirePlumber currently calls the default.
   SINK="$UMC"
 elif [ "$MODE" = production ] && [ -n "$FOCUSRITE" ]; then
   # Same idea as the UMC above: the hall interface, when present, is always
@@ -313,10 +449,22 @@ if [ -z "$SINK" ]; then
   exit 1
 fi
 
-# NB: this trusts pw-link to emit ports in channel order. It does for the UMC,
-# but the tool does not guarantee it - on a 12-out interface check the result
-# against monitors.tsv before trusting the assignment.
-if [[ "$SINK" =~ $FOCUSRITE_RE ]]; then
+# NB: the UMC and default-sink branches TRUST pw-link to emit ports in channel
+# order. It does for the UMC, but the tool does not guarantee it - on a wider
+# interface check the result against monitors.tsv before believing it. The
+# Focusrite branch does not trust it blindly (the exclusions below came out of
+# a tone test), and the TNB branch does not trust it at all - its order was
+# established by ear and is replayed from the saved config.
+if [ -n "$TNB_PORTS" ]; then
+  # Used verbatim, in the SAVED CHANNEL ORDER, minus anything that has since
+  # left the graph. The order is the whole point - it came out of the tone
+  # sweep and exists nowhere else - so the saved list is what gets walked and
+  # the live graph only filters it. One snapshot, not one pw-link per port.
+  have=$(pw-link -i 2>/dev/null)
+  PORTS=$(printf '%s' "$TNB_PORTS" | tr ',' '\n' | grep -v '^$' \
+    | grep -Fxf <(printf '%s\n' "$have") \
+    | head -n "$N" | paste -sd,)
+elif [[ "$SINK" =~ $FOCUSRITE_RE ]]; then
   # Scarlett 18i20's 20 "playback_AUX*" ports (raw PCM channels 1-20, in
   # order). CONFIRMED BY EAR on 2026-09-16 against the actual hall wiring:
   #   AUX0-7    the 8 real rear analog outs in use here
@@ -335,16 +483,26 @@ if [[ "$SINK" =~ $FOCUSRITE_RE ]]; then
 else
   PORTS=$(pw-link -i 2>/dev/null | grep "^$SINK:playback_" | head -n "$N" | paste -sd,)
 fi
-[ -n "$PORTS" ] || { echo "no playback ports on $SINK - is the interface connected?"; exit 1; }
+if [ -z "$PORTS" ]; then
+  echo "no playback ports on $SINK - is the interface connected?"
+  [ "$MODE" = tnb ] && {
+    echo "  None of TNB's saved ports are in the graph. If the rack has changed:"
+    echo "      ./start-46.sh --tnb --reconfigure"; }
+  exit 1
+fi
 found=$(printf '%s' "$PORTS" | tr ',' '\n' | grep -c .)
 
 if [ "$found" -lt "$N" ]; then
   # head -n returns what exists and says nothing, which in the hall would mean
   # discovering mid-concert that 8 of 12 channels were never routed.
-  if [ "$MODE" = production ]; then
+  if [ "$VENUE" = 1 ]; then
     echo "ABORT: asked for $N outputs, $SINK has $found."
-    echo "       Production will not start under-routed. Check the interface,"
-    echo "       or state the real count: ./start-46.sh --production $found"
+    echo "       A venue will not start under-routed. Check the interface,"
+    echo "       or state the real count: ./start-46.sh --$MODE $found"
+    if [ "$MODE" = tnb ]; then
+      echo "       If TNB's rack has changed, redo the port map by ear:"
+      echo "           ./start-46.sh --tnb --reconfigure"
+    fi
     exit 1
   fi
   echo "WARNING: asked for $N outputs, $SINK has $found - continuing on $found."
