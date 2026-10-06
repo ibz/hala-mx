@@ -1356,6 +1356,385 @@ define :play_nomos_phase do |o|
   { step: step, g: g }
 end
 
+# 1e. NICAPETRE - a room with a real vertical axis
+#
+# Braila, the elliptical hall: outer wall 10.00 x 8.00 m, a concentric void of
+# 7.00 x 5.00 m in the floor above, a 1.50 m gallery running all the way round
+# it, 4.20 m of ground floor and 3.60 m more above (nicapetre.tsv). Four
+# monitors on the gallery rail, four on the ground.
+#
+# THE HEIGHT IS REAL HERE, and that is the thing that makes this venue not like
+# the others. Hala MX puts all twelve monitors at Z = 1.80 m and states every
+# vertical cue with Blauert's bands because there is no speaker overhead; TNB's
+# cube borrows the same fiction for its z axis. This room has a genuine ~4 m
+# shaft between the two rings and a stained-glass skylight over it, so up and
+# down are PHYSICAL. No band pair is needed to claim them, and none is used.
+#
+# TWO LAYERS, MOVING AGAINST EACH OTHER:
+#
+#   play_rain  a recording of a slow underwater waterfall, travelling a
+#              LEMNISCATE - round the room while falling and rising twice.
+#   play_rise  Hala MX's inhale, climbing bottom to top while it darkens and
+#              falls in pitch. The water's counter-motion.
+
+# PLACEMENT - the one law both layers use.
+#
+# A position is (azimuth, height), not a channel index. Every other engine in
+# this file takes a real number along a LINE of speakers, because Hala MX's rig
+# is a drawing laid out flat and TNB's quad is a ring; this rig is a CYLINDER,
+# and a cylinder needs two coordinates. Collapsing it to one is what would make
+# a fall indistinguishable from a turn.
+#
+#   az  in quarter-turns, cyclic: 0 = North (the stair), 1 = East, 2 = South,
+#       3 = West. Fractional values pan between neighbours.
+#   h   0 = the ground ring, 1 = the gallery ring.
+#
+# Constant power in BOTH coordinates - cos/sin round the ring, cos/sin up the
+# shaft - so the total radiated power is the same wherever the source is. The
+# two laws multiply, which keeps it flat across the whole cylinder rather than
+# only along each axis.
+#   per_ring  how many monitors each ring actually has. 4 in Braila; 2 in the
+#             studio, where the UMC's four become TWO ABOVE AND TWO BELOW
+#             rather than a flat quad.
+#
+# THE FOLD KEEPS THE VERTICAL AND SPENDS THE AZIMUTH, which is the only way
+# round that is any use here. Hala MX folds a twelve-channel drawing onto four
+# by compressing the whole thing; TNB folds its second quad onto its first and
+# lets the two zones sum. Neither would work for this venue: the piece IS a
+# fall, and a fold that flattens the two rings into one plane throws away the
+# only axis that matters and leaves you judging a waterfall that cannot
+# descend. So rings are preserved at any size and it is the number of azimuths
+# that degrades - 4 per ring at the venue, 2 in the studio, 1 if someone runs
+# it on a stereo pair, which is still up and down.
+define :nica_place do |az, h, discrete, per_ring = 4|
+  pr   = [per_ring.to_i, 1].max
+  # az arrives in quarter-turns of a FULL revolution whatever the rig, so the
+  # trajectory never has to know how many speakers there are.
+  a    = (az % 4.0) / 4.0 * pr
+  i    = a.floor
+  frac = a - i
+  # With ONE monitor per ring there is no azimuth to pan: both "neighbours" are
+  # the same channel, and panning between them would add two coherent copies of
+  # the same signal on the same speaker - amplitude summing to as much as
+  # sqrt(2), a 3 dB ripple riding on every revolution. Measured before this
+  # line existed. Collapse the pan instead; the vertical is untouched, which on
+  # a stereo pair is the only thing left worth having.
+  frac = 0.0 if pr == 1
+  lo_ch = (i % pr) + 1           # the two neighbours on a ring
+  hi_ch = ((i + 1) % pr) + 1
+  g_lo  = Math.cos(frac * Math::PI / 2)
+  g_hi  = Math.sin(frac * Math::PI / 2)
+  hc    = [[h, 0.0].max, 1.0].min
+  g_up  = Math.sin(hc * Math::PI / 2)
+  g_dn  = Math.cos(hc * Math::PI / 2)
+  # The upper ring takes the first pr channels and the ground the next pr, so
+  # channel order reads DOWNWARD, the way the water does. At the venue that is
+  # 1-4 over 5-8; in the studio 1-2 over 3-4. nicapetre.tsv is the authority
+  # for the full rig and says the same.
+  out = [[lo_ch,      g_lo * g_up],
+         [hi_ch,      g_hi * g_up],
+         [lo_ch + pr, g_lo * g_dn],
+         [hi_ch + pr, g_hi * g_dn]]
+  if discrete
+    # Pick ONE speaker with probability equal to its power share. In a hall with
+    # this much stone a phantom image is a fiction the room refuses anyway - the
+    # in-situ capture at Hala MX already found that reflections broaden a
+    # phantom and that it collapses off-axis, and this room is far more
+    # reverberant than that one. A real source does not collapse.
+    r = rand
+    acc = 0.0
+    tot = out.sum { |_, g| g * g }
+    pick = out.last
+    out.each do |ch, g|
+      acc += (g * g) / tot
+      if r <= acc
+        pick = [ch, Math.sqrt(tot)]
+        break
+      end
+    end
+    [pick]
+  else
+    # At pr 1 the two azimuth neighbours ARE the same channel, so the pairs
+    # collapse and have to be summed rather than returned twice.
+    merged = Hash.new(0.0)
+    out.each { |ch, g| merged[ch] += g }
+    merged.select { |_, g| g > 0.001 }.to_a
+  end
+end
+
+# THE LEMNISCATE.
+#
+# Azimuth advances steadily round the room; height is sin of TWICE the azimuth.
+# Over one revolution that is two descents and two ascents, crossing at the
+# sides - and seen from outside the cylinder it traces a figure of eight. It is
+# the tennis-ball seam, and it is the only closed curve on a cylinder that
+# falls and rises twice without ever stopping.
+#
+# THE PHASE IS CHOSEN SO THE FIGURE LANDS THE RIGHT WAY ROUND ON THE RIG.
+# With h = (1 - cos 2*theta) / 2 the four EXTREMES sit exactly on monitors -
+# lowest at North and South on the ground, highest at East and West on the
+# gallery, which are the two curved doorways - while the two crossings fall
+# exactly half way between monitors. That is the useful arrangement: the
+# moments the ear can place are placed on a real source, and the moment the
+# figure is ambiguous anyway is left to a phantom.
+#
+# sin(2*theta) instead would invert it, putting the crossings on the speakers
+# and the extremes between them, which is the same curve doing the opposite
+# favour. A quarter-turn offset puts the crossings at three quarters of a span,
+# which is neither - measured, and the reason this is written down.
+# AND IT HAS TO PRECESS, or half the rig lives in its shadow.
+#
+# At a ratio of exactly 2 the height is a pure function of the azimuth -
+# h = (1 - cos(pi*az))/2 - so the four extremes land on integer azimuths
+# forever. That is what puts them on monitors, which is what we wanted; what it
+# ALSO does is guarantee that the other four monitors never host an extreme at
+# all, because the azimuth each of them owns is a height the figure never
+# reaches there. Measured over twenty passes on the eight-monitor rig: 19% of
+# the energy on ch2/4/5/7 and 6% on ch1/3/6/8, a 3.3x spread that no amount of
+# level trimming can even out because it is geometry, not gain.
+#
+# Detuning the ratio very slightly makes the figure drift round the ring
+# instead. At 0.02 an extreme moves one azimuth unit every ~12 laps - about
+# twenty minutes at the default lap - so moment to moment it is still the same
+# closed eight, and over an afternoon every monitor has taken its turn.
+# precess 0 restores the locked figure exactly, if that is ever wanted.
+define :nica_lemniscate do |phase, precess = 0.0|
+  az = phase * 4.0                          # quarter-turns, one revolution
+  h  = 0.5 - 0.5 * Math.cos(4 * Math::PI * phase * (1.0 + precess))
+  [az, h]
+end
+
+# 1e-i. THE RAIN - the recording, travelling
+#
+# One generation = one pass of the file while the lemniscate completes
+# nica_laps turns. Generations OVERLAP, because the recording fades to silence
+# over its last ~18 s: measured, it peaks around 44-52 s and is at -70 dB by
+# 79. Played end to end that is a long hole every pass, and this layer is
+# supposed to be continuous water. So the tail is trimmed (nica_rain_tail) and
+# the next generation starts under it.
+#
+# SIXTEEN VOICES, not eight: the file is stereo and its two channels mean
+# something. Left is up the waterfall, right is down it. sound_out's mode: opt
+# takes one channel of the incoming stereo (1 = left, 2 = right), so each
+# speaker gets two sends and the pair straddles the trajectory VERTICALLY by
+# nica_dipole - left above, right below. The recording's own up/down becomes a
+# small real height difference riding on the macro position, instead of being
+# flattened into a mono point.
+#
+# WHY THE SOURCE AMP AND NOT THE FX AMP: sound_out's `amp` is the level of the
+# pass-through to the main stereo mix, which is why every other chain in this
+# file sets it to 0. It does not touch the hardware send. So the travelling
+# gain has to live on the sample itself.
+define :play_rain do |o|
+  dur    = o[:dur]
+  step   = o[:step] || 0.2
+  # THE TRAJECTORY RUNS ON ITS OWN CLOCK, carried in by the caller, and this is
+  # not a refinement - it is the difference between a working piece and one
+  # speaker that is permanently quiet.
+  #
+  # The phase used to be t / dur: the figure locked to the generation, so the
+  # SAME point of the lemniscate landed in the fade window on every single
+  # pass, forever. At the default geometry that point is phase 0, which is the
+  # ground ring's extreme on the first azimuth - channel 3 on a four-output
+  # rig. Measured over a generation: ch1 27%, ch2 31%, ch3 12%, ch4 30% of the
+  # energy. Reported from the room as "nothing in monitor 3, very weak in 4",
+  # and that is exactly what it was.
+  #
+  # With an absolute phase the fade window walks round the figure instead, so
+  # no channel is systematically disadvantaged - PROVIDED nica_lap is not a
+  # ratio of (gen - fade), or it relocks.
+  #
+  # It also makes the overlap spatially seamless: both generations compute the
+  # same position at the same instant, because phase0_new is phase0_old
+  # advanced by exactly the handover interval. The water does not jump when one
+  # pass hands to the next.
+  lap     = o[:lap] || 97.0
+  phase0  = o[:phase0] || 0.0
+  precess = o[:precess] || 0.02
+  dipole = o[:dipole] || 0.12
+  amp    = o[:amp] || 1.0
+  fade   = o[:fade] || 4.0
+  wav    = o[:wav]
+  rig    = o[:rig] || 8
+  pr     = [rig / 2, 1].max
+
+  # Start every voice first, silent, then drive them. Starting them as the
+  # trajectory passes would mean a node creation inside the control loop, which
+  # is exactly the per-event work the rest of this file avoids.
+  # A PRE-ALLOCATED ARRAY, one slot per (channel, side), each thread writing its
+  # own index. Not a Hash, and the difference is not style.
+  #
+  # This was a Hash that every thread wrote into. That was SUSPECTED of losing
+  # entries under concurrent resize - a lost entry is never controlled, and
+  # since every voice starts at amp 0 and only becomes audible through
+  # `control`, it would be a speaker silent for the whole generation. Tested
+  # directly: 400 x 16 concurrent writes lost NOTHING, so the GIL covers it and
+  # that was not the fault. The Array stays because distinct pre-allocated
+  # indices cannot race by construction and cost nothing, but it is insurance,
+  # not the fix - the real one was the trajectory phase, below.
+  #
+  # The local is still per-invocation, which is what keeps two overlapping
+  # generations from driving each other's voices.
+  slot  = lambda { |ch, side| (ch - 1) * 2 + (side == :l ? 0 : 1) }
+  nodes = Array.new(rig * 2)
+  (1..rig).each do |ch|
+    [[:l, 1], [:r, 2]].each do |side, mode|
+      in_thread do
+        with_fx :sound_out, output: ch, mode: mode, amp: 0 do
+          with_fx :tanh, krunch: 0.1, amp: get(:xen_out_headroom, 1.0) do
+            nodes[slot.call(ch, side)] =
+              sample wav, start: 0.0, finish: o[:tail] || 0.75,
+                          amp: 0, attack: 0.01, release: 0.1
+            sleep dur
+          end
+        end
+      end
+    end
+  end
+  # The threads above have to have reached their `sample` before anything can be
+  # addressed to it. One scheduler tick is enough, and this is an administrative
+  # wait rather than a musical one.
+  sleep step
+  # And if one did not arrive, SAY SO. A voice with no node is a silent speaker
+  # and nothing downstream would ever mention it.
+  missing = (1..rig).flat_map { |c| [:l, :r].map { |sd| nodes[slot.call(c, sd)] ? nil : "#{c}#{sd}" } }.compact
+  puts "XENAKIS/NICAPETRE: WARNING - #{missing.size} voice(s) never registered: " \
+       "#{missing.join(' ')} - those speakers will be silent this pass" unless missing.empty?
+
+  # The control loop runs in ITS OWN thread so this method can return before
+  # the generation ends - that early return is what makes the next generation
+  # start underneath this one's tail.
+  in_thread do
+    t = 0.0
+    while t < dur
+      ph    = (phase0 + t / lap) % 1.0
+      # The precession rides the ABSOLUTE phase, not the within-generation one,
+      # or it would reset every pass and precess nothing.
+      az, h = nica_lemniscate ph, precess
+      # In and out at the generation's edges, so overlapping generations cross
+      # rather than butt. sqrt for the same reason play_cloud_phase's xfade
+      # uses it: two passes of the same water add in POWER, not amplitude.
+      env = 1.0
+      env = Math.sqrt(t / fade)         if t < fade
+      env = Math.sqrt((dur - t) / fade) if t > dur - fade
+      gains = Hash.new(0.0)
+      [[:l, h + dipole], [:r, h - dipole]].each do |side, hh|
+        nica_place(az, hh, false, pr).each { |ch, g| gains[[ch, side]] += g }
+      end
+      (1..rig).each do |ch|
+        [:l, :r].each do |side|
+          n = nodes[slot.call(ch, side)]
+          control n, amp: gains[[ch, side]] * amp * env, amp_slide: step if n
+        end
+      end
+      sleep step
+      t += step
+    end
+  end
+
+  # Hand back `fade` early. Never negative, however the desk is set.
+  sleep [dur - fade - step, step].max
+end
+
+# 1e-ii. THE RISE - Hala MX's inhale, climbing
+#
+# The inhale and nothing else. In Hala MX that phase DESCENDS: it enters
+# pitched up at 1.4 and darkens to 0.95 while its filter closes from MIDI 120
+# to 88 - 8372 Hz down to 1319. It is the breath coming down.
+#
+# Here it is flown UPWARD. The material still darkens and falls in pitch as it
+# goes, so the gesture contradicts itself: the thing climbing the room is the
+# same thing the room's other layer is pouring down it, and it gets heavier the
+# higher it gets. That is the counter-motion, and it is sharper than it was
+# with the exhale, which opened up as it rose and agreed with the direction.
+#
+# Only pool_inhale_high is used - the dense cloud of the two, lambda 24 against
+# 8. The mid pool underneath it stays in Hala MX, the same way the exhale's
+# pressure cloud was left there.
+#
+# It climbs while the water falls. The two must not share a clock or the room
+# acquires a period - so nica_rise_block is deliberately not a ratio of the
+# rain's generation length, and the climb restarts on its own schedule.
+#
+# DISCRETE PLACEMENT. The hall is marble, plaster and glass over ~500 m3 with
+# almost no absorption, and an ellipse focuses besides. A phantom image is not
+# going to survive that, and a real source will - see nica_place.
+define :play_rise do |o|
+  dur     = o[:dur]
+  pool    = o[:pool]
+  lam     = o[:lambda]
+  shape   = o[:shape] || 3
+  amp_lo  = o[:amp_lo]
+  amp_hi  = o[:amp_hi]
+  spin    = o[:spin] || 0.25
+  # NB az_jitter, not `spread`: spread() is a Sonic Pi built-in and the
+  # PreParser refuses any file containing `spread =`. Fourth time - README 11b.
+  az_jitter = o[:az_jitter] || 1.2
+  enh_thr = o[:enh_thr] || 0.2
+  enh_bl  = o[:enh_below] || 1.0
+  enh_ab  = o[:enh_above] || 1.0
+  rig     = o[:rig] || 8
+  pr      = [rig / 2, 1].max
+  # The pitch and filter ramps are handed in, not baked. This engine used to
+  # carry the exhale's numbers inline; it now flies whatever phase of Hala MX
+  # it is given, which is the only reason swapping exhale for inhale was a desk
+  # change rather than a rewrite.
+  r0, r1  = o[:rate_from], o[:rate_to]
+  l0, l1  = o[:lpf_from],  o[:lpf_to]
+
+  events = []
+  t = 0.0
+  # A ZERO DENSITY IS SILENCE, and it has to be said explicitly - the same
+  # 0/0 -> NaN spin the clouds and the network were guarded against (README
+  # 11d). -log(1 - rand) / (lam * shape) is Infinity at lam 0 for every rand
+  # but one, and NaN when rand comes back exactly 0.0; NaN >= dur is FALSE, so
+  # the break never fires and the loop spins forever inside a live_loop. The
+  # zone goes silent, stays silent, and nothing errors.
+  lam = 0.0 if lam.nil?
+  while lam > 0.0
+    dt = 0.0
+    shape.times { dt += -Math.log(1 - rand) / (lam * shape) }
+    t += dt
+    break if t >= dur
+    f = t / dur
+    # The climb. Height is the phase itself, so a grain's position in the room
+    # IS its position in the gesture - the one thing the exhale always did with
+    # a span and can now do with a floor and a ceiling.
+    h  = f
+    az = spin * 4.0 * f + rrand(-az_jitter, az_jitter)
+    ch, g = nica_place(az, h, true, pr).first
+    events << { t: t, chan: ch,
+                wav: pool[:wav], cut: pool[:cuts].choose,
+                rate: r0 + (r1 - r0) * f,
+                lpf:  l0 + (l1 - l0) * f,
+                amp:  rrand(amp_lo, amp_hi) * g }
+  end
+  events.sort_by! { |e| e[:t] }
+
+  events.group_by { |e| e[:chan] }.each do |ch, mine|
+    in_thread do
+      with_fx :sound_out, output: ch, amp: 0 do
+        with_fx :compressor, threshold: enh_thr, slope_below: enh_bl,
+                            slope_above: enh_ab, clamp_time: 0.01,
+                            relax_time: 0.25 do
+          with_fx :tanh, krunch: 0.25, amp: get(:xen_out_headroom, 1.0) do
+            prev = 0.0
+            mine.each do |e|
+              sleep e[:t] - prev
+              prev = e[:t]
+              sample e[:wav], start: e[:cut][:start], finish: e[:cut][:finish],
+                     amp: e[:amp], rate: e[:rate], lpf: e[:lpf],
+                     attack: 0.01, release: 0.06
+            end
+            sleep dur - prev
+          end
+        end
+      end
+    end
+  end
+  sleep dur
+end
+
 # 1d. THE ATMOSPHERE LOADER THREAD
 # Prepares the next cycle's set and frees the set from TWO cycles ago - not
 # the previous one, which might still be sounding on its tail.
@@ -2312,8 +2691,100 @@ run_zones = (tnb_venue == :tnb) ||
             (tnb_venue == :nicapetre && nica_engine == :tnb_zones)
 
 if tnb_venue == :nicapetre
-  puts "XENAKIS/NICAPETRE: no piece of its own yet - nica_engine #{nica_engine}" \
-       "#{run_zones ? ' (borrowing the TNB zones as scaffolding)' : ' (parked)'}"
+  puts "XENAKIS/NICAPETRE: nica_engine #{nica_engine}" \
+       "#{run_zones ? ' - borrowing the TNB zones as scaffolding' : ''}"
+end
+
+# ============================================================================
+# 4. NICAPETRE - the waterfall and the climb
+# ============================================================================
+#
+# Two layers over eight monitors in two rings, in a room whose vertical axis is
+# real (nicapetre.tsv). They move AGAINST each other: the water falls and rises
+# round a lemniscate, the shatter climbs. Neither is Hala MX's breath and
+# neither is TNB's cube - what they share with those is the grain engine, the
+# headroom trim and nothing else.
+if tnb_venue == :nicapetre && nica_engine == :layers
+  nica_sched = get(:xen_sched_ahead, 0.5)
+  nica_wav   = path_base + "nicapetre/" + get(:nica_rain_file, "Braila_Oktosi.wav")
+  unless File.exist?(nica_wav)
+    raise "Nicapetre: missing #{nica_wav} - copy the recording into " \
+          "output_xenakis_installation/nicapetre/"
+  end
+  puts "XENAKIS/NICAPETRE: rain #{File.basename(nica_wav)} " \
+       "(#{'%.1f' % sample_duration(nica_wav)} s), upper ring 1-4, ground 5-8"
+
+  # --- LAYER 1: the rain, travelling the lemniscate ------------------------
+  nica_said  = nil
+  nica_phase = 0.0
+  live_loop "nica_rain_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
+    use_sched_ahead_time nica_sched
+    gen = get(:nica_rain_gen, 62.0)
+    xf  = get(:nica_rain_fade, 4.0)
+    # READ EVERY BLOCK, never at load. The same read done once at the top of
+    # the file is what sent TNB's Zone IV to outputs 5-8 on a 4-output rig and
+    # made it silent with no error (README 11c).
+    rig = [get(:xen_rig_outputs, 8).to_i, 2].max
+    focus = get(:nica_focus, :both)
+    # SOLO. The layers hold their own time either way, so soloing changes what
+    # you hear and never the cadence - same rule as xen_focus and tnb_focus.
+    # Neither layer carries state across blocks, so nothing drifts while muted.
+    unless [:both, :rain].include?(focus)
+      sleep [gen - xf - get(:nica_step, 0.2), 0.1].max
+      next
+    end
+    if rig != nica_said
+      puts "XENAKIS/NICAPETRE: #{rig} outputs - #{[rig / 2, 1].max} per ring, " \
+           "upper 1-#{[rig / 2, 1].max}, ground #{[rig / 2, 1].max + 1}-#{rig}"
+      nica_said = rig
+    end
+    lap = get(:nica_lap, 97.0)
+    play_rain wav: nica_wav, dur: gen, rig: rig,
+              tail: get(:nica_rain_tail, 0.75),
+              lap: lap, phase0: nica_phase,
+              precess: get(:nica_precess, 0.02),
+              step: get(:nica_step, 0.2),
+              dipole: get(:nica_dipole, 0.12),
+              fade: xf,
+              amp: get(:nica_rain_amp, 1.0) * get(:xen_master_amp, 1.0)
+    # play_rain returns `fade` early of its own accord, so the next generation
+    # starts under this one's tail. Advance the phase by exactly that handover
+    # interval, so the next generation picks the figure up where this one left
+    # it rather than restarting it.
+    nica_phase = (nica_phase + (gen - xf) / lap) % 1.0
+  end
+
+  # --- LAYER 2: the inhale, climbing ---------------------------------------
+  live_loop "nica_rise_#{run_tag}".to_sym, seed: get(:xen_seed, 0) + 2 do
+    use_sched_ahead_time nica_sched
+    blk = get(:nica_rise_block, 47.0)
+    amp = get(:nica_rise_amp, 1.0) * get(:xen_master_amp, 1.0)
+    enh = get(:xen_enhance, 0.4)
+    unless [:both, :rise].include?(get(:nica_focus, :both))
+      sleep blk
+      next
+    end
+    # WHICH PART OF THE INHALE. a..b as fractions of the phase, so the whole of
+    # it is 0..1 and its second half is 0.5..1. The ramps are interpolated from
+    # Hala MX's own constants rather than copied, so if the breath is retuned
+    # this follows it.
+    a = get(:nica_rise_from, 0.5)
+    b = get(:nica_rise_to, 1.0)
+    play_rise dur: blk, pool: pool_inhale_high,
+              rig: [get(:xen_rig_outputs, 8).to_i, 2].max,
+              rate_from: inhale_rate_from + (0.95 - inhale_rate_from) * a,
+              rate_to:   inhale_rate_from + (0.95 - inhale_rate_from) * b,
+              lpf_from:  inhale_lpf_from  + (88.0 - inhale_lpf_from)  * a,
+              lpf_to:    inhale_lpf_from  + (88.0 - inhale_lpf_from)  * b,
+              lambda: get(:nica_rise_density, 18.0) * get(:xen_density, 1.0),
+              shape: get(:nica_rise_shape, 3).to_i,
+              spin: get(:nica_rise_spin, 0.25),
+              az_jitter: get(:nica_rise_jitter, 1.2),
+              amp_lo: 0.138 * amp, amp_hi: 0.345 * amp,
+              enh_thr: get(:xen_enhance_threshold, 0.2),
+              enh_below: enh > 0 ? 1.0 + enh * 0.5 : 1.0,
+              enh_above: enh < 0 ? 1.0 + enh * 0.5 : 1.0
+  end
 end
 
 if run_zones

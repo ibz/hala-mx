@@ -39,10 +39,10 @@ declared in the header, no separate venv needed: `./grains_slice.py`,
   |---|---|---|---|---|---|
   | `--production` | Hala MX | 12 | Focusrite 18i20 | the breath (§4, §8) | off |
   | `--tnb` | TNB | 8 | by ear on first run (§7e) | two zones (§11) | off |
-  | `--nicapetre` | Nicăpetre | 8 | by ear on first run (§7e) | **none yet** (§12) | off |
+  | `--nicapetre` | Nicăpetre | 8 | by ear on first run (§7e) | rain + rise (§12) | off |
   | `--simulation` | studio | 4 | UMC404HD | the breath | on |
   | `--tnb-simulation` | studio | 4 | UMC404HD | two zones | on |
-  | `--nicapetre-simulation` | studio | 4 | UMC404HD | none yet | on |
+  | `--nicapetre-simulation` | studio | 4 | UMC404HD | rain + rise | on |
 
   It sets `SC_JACK_DEFAULT_OUTPUTS` so all outputs land on the interface rather
   than the built-in speakers (§7d), writes the venue's rig and bleep into
@@ -2766,40 +2766,243 @@ unchanged, Zone I staying inside 1–4 with no dead seam and wrapping correctly
 when its window drifts off the ring, Zone IV staying inside 5–8, decaying by
 generation and terminating. That is arithmetic, not sound.
 
-## 12. Nicăpetre — the rig, before the piece
+## 12. Nicăpetre — the waterfall and the climb
 
-**There is no piece for this venue yet.** The rig is real: 8 outputs, two
-quads, on an interface established by ear at load-in, exactly like TNB. The
-launcher mode, the desk and the interface setup all exist so the room can be
-patched, levelled and walked before a note of its own is written.
+Brăila, the elliptical hall: outer wall 10.00 × 8.00 m, a concentric void of
+7.00 × 5.00 m in the floor above, a 1.50 m gallery running all the way round
+it, 4.20 m of ground floor and 3.60 m more above, under a stained-glass
+skylight. Four monitors on the gallery rail, four on the ground
+(`nicapetre.tsv`).
 
-`nicapetre-buffer.rb` says which engine the venue runs:
+### 12a. The height is real
+
+This is the thing that makes the venue unlike the other two. Hala MX puts all
+twelve monitors at Z = 1.80 m and states every vertical cue with Blauert's
+bands because there is no speaker overhead (§5); TNB's cube borrows the same
+fiction for its z axis (§11c). **This room has a genuine ~4 m shaft between the
+two rings**, so up and down are physical. No band pair is needed to claim them,
+and none is used.
+
+It is also a resonant stone shaft — marble, plaster, glass, parquet, ~500 m³
+with almost no absorption, and an ellipse focuses besides. That is *good* for
+the water, which should be a wash, and hostile to the grains, which is why the
+climb runs at a quarter of MX's density and will probably need less.
+
+### 12b. Placement is two-dimensional
+
+Every other engine in the file takes a real number along a **line** of
+speakers: Hala MX's rig is a drawing laid out flat, TNB's quad is a ring. This
+rig is a **cylinder**, and a cylinder needs two coordinates. Collapsing it to
+one is exactly what would make a fall indistinguishable from a turn.
+
+`nica_place(az, h, discrete)` takes azimuth in quarter-turns (0 = North, the
+marble stair; 1 = East; cyclic) and height (0 = ground ring, 1 = gallery).
+Constant power in **both** coordinates — cos/sin round the ring, cos/sin up the
+shaft — and the two laws multiply, so total radiated power is flat across the
+whole cylinder rather than only along each axis. Measured: deviation 3×10⁻¹⁶.
+
+#### The fold keeps the vertical and spends the azimuth
+
+Hala MX folds a twelve-channel drawing onto four by compressing the whole
+thing; TNB folds its second quad onto its first and lets the two zones sum.
+**Neither would work here.** The piece *is* a fall, and a fold that flattens the
+two rings into one plane throws away the only axis that matters — you would be
+judging a waterfall that cannot descend.
+
+So the rings are preserved at any size and it is the number of **azimuths** that
+degrades:
+
+| `xen_rig_outputs` | per ring | upper | ground |
+|---|---|---|---|
+| 8 — the venue | 4 | 1–4 | 5–8 |
+| 4 — the studio | 2 | **1–2** | **3–4** |
+| 2 — a pair | 1 | 1 | 2 |
+
+The trajectory never has to know how many speakers there are: azimuth arrives in
+quarter-turns of a full revolution whatever the rig, and `nica_place` scales it.
+`xen_rig_outputs` is read **every block**, never at load — the same read done
+once at the top of the file is what sent TNB's Zone IV to outputs 5–8 on a
+4-output rig and made it silent with no error (§11c).
+
+> At **one monitor per ring** the two azimuth neighbours are the same channel,
+> and panning between them adds two coherent copies of the same signal on the
+> same speaker — amplitude summing to as much as √2, a 3 dB ripple riding on
+> every revolution. Measured. The pan collapses at `pr == 1` instead; the
+> vertical is untouched, which on a stereo pair is the only thing left worth
+> having.
+
+Grains place **discretely** — one speaker, picked with probability equal to its
+power share. A phantom image is a fiction this hall refuses: the in-situ
+capture at Hala MX already found reflections broaden a phantom and that it
+collapses off-axis (§10a), and this room is far more reverberant than that one.
+
+### 12c. Layer 1 — the rain, travelling a lemniscate
+
+A recording of a slow underwater waterfall. **The file always plays forward**;
+what goes back up is the position, not the tape.
+
+Azimuth advances steadily round the room while height follows `(1 − cos 2θ)/2`
+— two descents and two ascents per revolution, crossing at the sides. Seen from
+outside the cylinder that traces a figure of eight: the tennis-ball seam, the
+only closed curve on a cylinder that falls and rises twice without ever
+stopping.
+
+**The phase is chosen so the figure lands the right way round on the rig.** Its
+four extremes sit exactly *on* monitors — lowest at North and South on the
+ground, highest at East and West on the gallery, which are the two curved
+doorways — while the two crossings fall exactly half way *between* monitors.
+The moments the ear can place are placed on a real source; the moment the
+figure is ambiguous anyway is left to a phantom. `sin 2θ` would invert that,
+and a quarter-turn offset puts the crossings at three quarters of a span, which
+is neither — measured, which is why it is written down.
+
+#### The figure must not be locked to the generation
+
+The phase was `t / dur` — the lemniscate restarted with every pass of the
+recording, so the **same point of the figure landed in the fade window every
+single time, forever**. At the default geometry that point is phase 0, which is
+the ground ring's extreme on the first azimuth — channel 3 on a four-output
+rig. Measured over twenty passes: ch1 27%, ch2 27%, ch3 **20%**, ch4 27%.
+Reported from the room as "nothing in monitor 3, very weak in 4".
+
+`nica_lap` puts the figure on its own clock in seconds, carried across
+generations by the caller, and is deliberately **not** a ratio of
+`nica_rain_gen − nica_rain_fade` (58 s) or it relocks. Measured after:
+25/25/25/25, a 1.08× spread.
+
+It also makes the overlap spatially seamless — both generations compute the
+same position at the same instant, because the new generation's starting phase
+is the old one's advanced by exactly the handover interval. The water does not
+jump when one pass hands over to the next.
+
+#### A lemniscate has four extremes and the venue has eight monitors
+
+So at most half of them can ever host one. With the height an exact 2:1
+function of the azimuth the figure is **phase-locked to the ring**, and
+measured over twenty passes at the venue that is 19% of the energy on
+ch2/4/5/7 against **6%** on ch1/3/6/8 — a 3.3× spread that no level trim can
+even out, because it is geometry rather than gain.
+
+`nica_precess` detunes that ratio very slightly. At **0.02** an extreme moves
+one monitor every ~20 minutes, so within any single visit it is still the
+closed figure of eight that was asked for, and across a day every monitor takes
+its turn — verified over 4000 extremes, all eight hosting, 1.1× spread. **Set
+it to 0** for the exactly-locked figure, and accept that four monitors will sit
+in its shadow for the whole run.
+
+This is the one place where the geometry and the rig genuinely disagree, and
+the knob is the honest way to say so rather than pretending one of them wins.
+
+**Sixteen voices, not eight.** The file is stereo and its two channels mean
+something: left is up the waterfall, right is down it. `sound_out`'s `mode:`
+opt takes one channel of the incoming stereo (1 = left, 2 = right), so each
+speaker gets two sends and the pair straddles the trajectory **vertically** by
+`nica_dipole` — left above, right below. The recording's own up/down becomes a
+small real height difference riding on the macro position, instead of being
+flattened into a mono point.
+
+> **The travelling gain lives on the sample, not on the FX.** `sound_out`'s
+> `amp` is the level of the pass-through to the main stereo mix — which is why
+> every other chain in this file sets it to 0 — and it does not touch the
+> hardware send.
+
+**The recording fades to silence and must not be heard doing it.** Measured: it
+peaks around 44–52 s and is at −70 dB by 79 s of its 82.9. So the tail is
+trimmed (`nica_rain_tail 0.75`, 62 s of body) and generations **overlap** —
+`play_rain` returns `nica_rain_fade` early of its own accord, so the next pass
+starts under this one's tail, with the same `sqrt` equal-power taper the beds
+and Zone I use (§8h, §11b). Node handles are kept in a plain local Hash rather
+than Time State, because two generations run at once and a global key would
+have the older one driving the younger one's voices.
+
+### 12d. Layer 2 — the rise
+
+Hala MX's **inhale**, climbing bottom to top against the water. Only
+`pool_inhale_high` — the dense cloud of the two, λ24 against 8; the mid pool
+underneath it stays in Hala MX, the same way the exhale's pressure cloud does.
+
+**In MX that phase descends.** It enters pitched up at 1.4 and darkens to 0.95
+while its filter closes from MIDI 120 to 88 — 8372 Hz down to 1319. It is the
+breath coming down.
+
+Here it is flown **upward**, so the gesture contradicts itself: the thing
+climbing the room is the same thing the other layer is pouring down it, and it
+gets heavier the higher it gets. That is sharper than it was with the exhale,
+which opened up as it rose and agreed with the direction.
+
+`nica_rise_from` / `nica_rise_to` pick which part of the inhale, as fractions of
+its phase. The ramps are **interpolated from MX's own constants** rather than
+copied, so retuning the breath carries through here.
+
+**Set to `0.5` → `1.0`: the second half only**, which runs pitch 1.175 → 0.95
+and filter MIDI 104 → 88, i.e. 3322 Hz → 1319 Hz. That is the inhale's
+*arrival*, with its bright 8 kHz entry left out — the half a room of this much
+stone can actually carry, and it keeps the climb below the band where the
+shatter would have smeared.
+
+A grain's height **is** its position in the gesture: the one thing the inhale
+always did with a moving span, it can now do with a floor and a ceiling.
+`nica_rise_spin` turns the climb into a helix; `nica_rise_jitter` scatters it in
+azimuth so it reads as a column rather than a line.
+
+**`nica_rise_block` is the vertical speed.** A grain's height is its position in
+the gesture, so the block length *is* how long a grain takes to cross the
+shaft. `nicapetre.tsv` puts 3.8 m between the rings:
+
+| block | vertical speed |
+|---|---|
+| 23 s | 16.5 cm/s |
+| **47 s** | **8.1 cm/s** |
+
+It is also how often the climb restarts — there is only ever one in the air.
+
+**The three clocks must not share a factor.** 47 is prime against both
+`nica_rain_gen` (62 s) and `nica_lap` (97 s), so they do not line up inside 45
+minutes. Share one and the room acquires a period you can hear, which is the
+§11e argument again.
+
+### 12e. Hearing one layer — `nica_focus`
+
+`:both | :rain | :rise`, read every block, so it can be flipped while the piece
+runs exactly like `xen_focus` and `tnb_focus`.
 
 ```ruby
-set :nica_engine, :tnb_zones   # borrow TNB's mass + cube - SCAFFOLDING
-set :nica_engine, :silent      # park, and say so once every 30 s
+set :nica_focus, :rain   # the Oktosi recording alone, travelling the lemniscate
+set :nica_focus, :rise   # the shatter climbing, no water
+set :nica_focus, :both   # the piece
 ```
 
-`:tnb_zones` borrows §11's two engines on their own copy of the desk keys —
-repeated rather than shared, because the two venues must be tunable apart: the
-rooms are different sizes and the quads will not be rigged the same. The
-library prints which it is doing on every launch, so nobody mistakes the
-stand-in for the piece:
+**The muted layer holds its clock**, so soloing changes what you hear and never
+the cadence. Neither layer carries state across blocks, so nothing drifts while
+one is off.
 
-```
-XENAKIS/NICAPETRE: no piece of its own yet - nica_engine tnb_zones
-                   (borrowing the TNB zones as scaffolding)
-```
+> **`nica_rise_density 0` is a supported way to silence the climb, now.** It was
+> not: `play_rise` is newer than the other engines and never got the guard they
+> have. The grain interval is `-log(1 - rand) / (lambda * shape)`, which at
+> `lambda 0` is `Infinity` for every `rand` but one — and `0 / 0 = NaN` when
+> `rand` returns exactly `0.0`. `NaN >= dur` is **false**, so the `break` never
+> fires and the loop spins forever inside a `live_loop`: silent, permanent, no
+> error. Fourth engine, fourth time this has had to be written down (§11d).
+> Prefer `nica_focus` anyway — it also skips building the schedule.
 
-`:silent` parks — but it parks **loudly**, printing a line every 30 s. A venue
-that is deliberately quiet still has to say so: nothing here is allowed to be
-silent without a reason on the screen, which is what every other guard in this
-file exists to enforce.
+### 12f. What has not been heard
 
-When the Nicăpetre piece exists it gets its own branch in `xenakis.rb` and its
-own engines, exactly as TNB did. These zones are a scaffold, not a foundation.
+All of it. The placement law, the lemniscate's geometry and the climb are
+verified by lifting them verbatim into the shim — constant power across the
+cylinder, four turning points per lap, extremes on monitors and crossings
+between them, the climb starting 90% on the ground ring and ending 97% on the
+gallery, the rate and filter ramps landing where the exhale's second half
+leaves them. That is arithmetic.
 
-### 12a. One configurator, many venues
+The density has since been raised by ear, 9 → **18 grains/s**. MX's own
+`inhale_high` cloud runs 24/s over twelve channels, so 18 over eight is already
+denser per channel than the source. Per climb that is 47 s × 18 ≈ 850 grains
+across the 3.8 m shaft, about 220 per metre — and note that `nica_rise_block`
+multiplies this: slowing the climb from 23 s to 47 s already doubled the grains
+per metre without touching the density at all. 24/s is the ceiling that still
+means "the inhale at its own density".
+
+### 12g. One configurator, many venues
 
 `tnb-configure.sh` became **`venue-interface.sh <venue>`** when the second
 discovered venue arrived. It is identical in method — pick the card, set its
@@ -2827,18 +3030,6 @@ mechanism exists to prevent, so it is checked rather than trusted.
 `autostart.sh` is venue-aware too — it waits for *that* venue's saved sink
 rather than for the hall's Focusrite, which would otherwise burn the full 60 s
 before handing over.
-
-### 12b. What is still open
-
-The piece. Everything else is plumbing and it is done:
-
-- the mode, its simulation twin, and the desk
-- the interface setup, the saved port map, and the refusal to cross venues
-- the abort-when-under-routed rule that both venue modes share
-
-What is not decided is what Nicăpetre should *sound* like — which is a
-composition conversation about the room, not an engineering one, and it has not
-happened yet.
 
 ## Layout
 

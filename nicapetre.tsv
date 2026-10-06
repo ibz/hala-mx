@@ -1,0 +1,25 @@
+# Nicapetre, Braila - the elliptical hall. Two levels, one volume.
+#
+# The outer wall is an ellipse, major axis 10.00 m, minor 8.00 m. The ceiling
+# void (7.00 x 5.00 m) is concentric with it, leaving a ~1.50 m gallery all the
+# way round upstairs. Ground floor 4.20 m, upper 3.60 m.
+#
+# UNLIKE monitors.tsv, THE HEIGHTS HERE ARE REAL. Hala MX puts all twelve
+# monitors at Z = 1.80 m and fakes every vertical cue with Blauert bands; this
+# room has a genuine 4 m shaft between the two rings, so up and down are
+# physical and the band pair is not needed to state them.
+#
+# Azimuth 0 deg = North (the marble stair), increasing clockwise, so 90 = East
+# and 270 = West - the two curved doorways. Ring radius is nominal: the gallery
+# rail is an ellipse, not a circle, so the four are at equal ANGLE, not equal
+# distance. That asymmetry is the room's, and it is left in.
+#
+# channel  ring   azimuth  Z(m)  where
+1	upper	0	5.6	gallery rail, North - above the stair
+2	upper	90	5.6	gallery rail, East - above the curved door
+3	upper	180	5.6	gallery rail, South
+4	upper	270	5.6	gallery rail, West - above the curved door
+5	lower	0	1.8	ground, North - foot of the stair
+6	lower	90	1.8	ground, East
+7	lower	180	1.8	ground, South
+8	lower	270	1.8	ground, West
