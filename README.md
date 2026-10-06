@@ -35,12 +35,14 @@ declared in the header, no separate venv needed: `./grains_slice.py`,
 - **Launch with `./session-scripts/start-46.sh <mode>`**, not the binary
   directly, and **the mode is required**:
 
-  | mode | venue | outputs | interface | bleep |
-  |---|---|---|---|---|
-  | `--production` | Hala MX | 12 | Focusrite 18i20 | off |
-  | `--tnb` | TNB | 8 | established by ear on first run (§7e) | off |
-  | `--simulation` | studio | 4 | UMC404HD | on |
-  | `--tnb-simulation` | studio | 4 | UMC404HD | on |
+  | mode | venue | outputs | interface | piece | bleep |
+  |---|---|---|---|---|---|
+  | `--production` | Hala MX | 12 | Focusrite 18i20 | the breath (§4, §8) | off |
+  | `--tnb` | TNB | 8 | by ear on first run (§7e) | two zones (§11) | off |
+  | `--nicapetre` | Nicăpetre | 8 | by ear on first run (§7e) | **none yet** (§12) | off |
+  | `--simulation` | studio | 4 | UMC404HD | the breath | on |
+  | `--tnb-simulation` | studio | 4 | UMC404HD | two zones | on |
+  | `--nicapetre-simulation` | studio | 4 | UMC404HD | none yet | on |
 
   It sets `SC_JACK_DEFAULT_OUTPUTS` so all outputs land on the interface rather
   than the built-in speakers (§7d), writes the venue's rig and bleep into
@@ -1373,7 +1375,7 @@ nothing to hard code — and guessing it is precisely the failure this whole
 section exists to prevent.
 
 So `--tnb` asks once, the first time it runs, and never again. It hands over to
-`session-scripts/tnb-configure.sh`, which walks the three things that were
+`session-scripts/venue-interface.sh tnb`, which walks the three things that were
 actually wrong at Hala MX before somebody put a tone on each jack:
 
 1. **The ALSA profile.** A multichannel USB interface usually boots in a
@@ -1393,20 +1395,20 @@ actually wrong at Hala MX before somebody put a tone on each jack:
    silent through the sweep is what tells you to go and look at that layer.
 
 The answer lands in `~/.config/hala-mx/tnb-card.conf` (override with
-`$HALA_TNB_CONF`). It is machine-local rather than checked in, because
-`TNB_SINK` embeds that interface's USB serial — it describes one physical rack,
+`$HALA_VENUE_CONF`). It is machine-local rather than checked in, because
+`VENUE_SINK` embeds that interface's USB serial — it describes one physical rack,
 not the piece.
 
 ```sh
 ./session-scripts/start-46.sh --tnb                # first run configures, then launches
 ./session-scripts/start-46.sh --tnb --reconfigure  # the rack changed — redo it by ear
-./session-scripts/tnb-configure.sh --show          # what was saved
+./session-scripts/venue-interface.sh tnb --show    # what was saved
 ./session-scripts/tone-test.sh --sink <node>       # re-check a port map any time
 ```
 
-`TNB_PORTS` is stored **in channel order** and is replayed verbatim — it is
+`VENUE_PORTS` is stored **in channel order** and is replayed verbatim — it is
 never re-derived, because that order came out of somebody listening to a tone
-move round the room and exists nowhere in the graph. `TNB_OUTPUTS` likewise
+move round the room and exists nowhere in the graph. `VENUE_OUTPUTS` likewise
 wins over the mode's own default of 8: the number in the file is one that was
 confirmed in the room, and refusing to start against a figure nobody has
 re-checked would be the wrong way round. A number on the command line still
@@ -2764,6 +2766,80 @@ unchanged, Zone I staying inside 1–4 with no dead seam and wrapping correctly
 when its window drifts off the ring, Zone IV staying inside 5–8, decaying by
 generation and terminating. That is arithmetic, not sound.
 
+## 12. Nicăpetre — the rig, before the piece
+
+**There is no piece for this venue yet.** The rig is real: 8 outputs, two
+quads, on an interface established by ear at load-in, exactly like TNB. The
+launcher mode, the desk and the interface setup all exist so the room can be
+patched, levelled and walked before a note of its own is written.
+
+`nicapetre-buffer.rb` says which engine the venue runs:
+
+```ruby
+set :nica_engine, :tnb_zones   # borrow TNB's mass + cube - SCAFFOLDING
+set :nica_engine, :silent      # park, and say so once every 30 s
+```
+
+`:tnb_zones` borrows §11's two engines on their own copy of the desk keys —
+repeated rather than shared, because the two venues must be tunable apart: the
+rooms are different sizes and the quads will not be rigged the same. The
+library prints which it is doing on every launch, so nobody mistakes the
+stand-in for the piece:
+
+```
+XENAKIS/NICAPETRE: no piece of its own yet - nica_engine tnb_zones
+                   (borrowing the TNB zones as scaffolding)
+```
+
+`:silent` parks — but it parks **loudly**, printing a line every 30 s. A venue
+that is deliberately quiet still has to say so: nothing here is allowed to be
+silent without a reason on the screen, which is what every other guard in this
+file exists to enforce.
+
+When the Nicăpetre piece exists it gets its own branch in `xenakis.rb` and its
+own engines, exactly as TNB did. These zones are a scaffold, not a foundation.
+
+### 12a. One configurator, many venues
+
+`tnb-configure.sh` became **`venue-interface.sh <venue>`** when the second
+discovered venue arrived. It is identical in method — pick the card, set its
+ALSA profile, sweep a chime down each candidate port, write the confirmed order
+down — and the venue name is used only to name the config file and to address
+the operator. Nothing in it knows what any venue sounds like.
+
+```sh
+./session-scripts/venue-interface.sh nicapetre          # configure, by ear
+./session-scripts/venue-interface.sh nicapetre --show   # what was saved
+./session-scripts/start-46.sh --nicapetre --reconfigure # redo it at load-in
+```
+
+One config file per venue, `~/.config/hala-mx/<venue>-card.conf`, and the keys
+are `VENUE_*` rather than `TNB_*`. Each file records the venue it describes,
+and the launcher **refuses a config that names a different one**:
+
+```
+ABORT: ~/.config/hala-mx/nicapetre-card.conf describes 'tnb', not 'nicapetre'.
+```
+
+Playing one venue's port map in another room is the single mistake this whole
+mechanism exists to prevent, so it is checked rather than trusted.
+
+`autostart.sh` is venue-aware too — it waits for *that* venue's saved sink
+rather than for the hall's Focusrite, which would otherwise burn the full 60 s
+before handing over.
+
+### 12b. What is still open
+
+The piece. Everything else is plumbing and it is done:
+
+- the mode, its simulation twin, and the desk
+- the interface setup, the saved port map, and the refusal to cross venues
+- the abort-when-under-routed rule that both venue modes share
+
+What is not decided is what Nicăpetre should *sound* like — which is a
+composition conversation about the room, not an engineering one, and it has not
+happened yet.
+
 ## Layout
 
 ```
@@ -2778,7 +2854,8 @@ session-scripts/                   build + launch + audio helpers
   build-sonicpi-46.sh              builds Sonic Pi 4.6.0 (deps|clone|build|clean|all)
   start-46.sh                      --production | --tnb | --simulation | --tnb-simulation:
                                      desk, routing, launch
-  tnb-configure.sh                 establishes TNB's interface by ear, once (§7e)
+  venue-interface.sh               establishes a venue's interface by ear, once (§7e)
+  channel-levels.sh                per-channel RMS off the sink's monitor (§7e)
   tone-test.sh                     a chime down one output port at a time, to confirm by ear
   link-outs.sh                     repatches scsynth onto the interface (start-46 calls it)
   check-session.sh                 is it healthy right now? (delivery, not settings)
@@ -2788,6 +2865,7 @@ session-scripts/                   build + launch + audio helpers
   set-buffer-2048.sh, try-alsa.sh  5.0-era experiments; kept for reference only
   start-session.sh                 the 5.0 launcher, superseded by start-46.sh
 sonic-pi-buffer.rb                 the Hala MX desk (xen_venue :mx)
+nicapetre-buffer.rb                the Nicapetre desk - rig only, no piece yet (section 12)
 tnb-buffer.rb                      the TNB desk - two zones, no breath (section 11)
 monitors.tsv                       physical positions of the 12 monitors (cm)
 nodes.tsv                          theoretical breathing path, 11 nodes

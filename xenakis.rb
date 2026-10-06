@@ -2296,7 +2296,27 @@ end
 # only, for now, in both zones. Zone IV should never have beds: continuity is
 # precisely what it is specified not to have.
 
-if get(:xen_venue, :mx) == :tnb
+# ============================================================================
+# NICAPETRE shares this block while its own piece does not exist. The venue is
+# real - 8 outputs, two quads, an interface established by ear at load-in - and
+# the rig has to be patchable, levellable and walkable before a note of its own
+# is written. nica_engine :tnb_zones borrows the two zones below to do that,
+# and says so out loud on every launch so nobody mistakes the stand-in for the
+# piece. :silent parks instead, for when the room should be quiet.
+#
+# When the Nicapetre piece exists it gets its own branch here and its own
+# engines, exactly as TNB did - these zones are a scaffold, not a foundation.
+tnb_venue = get(:xen_venue, :mx)
+nica_engine = get(:nica_engine, :tnb_zones)
+run_zones = (tnb_venue == :tnb) ||
+            (tnb_venue == :nicapetre && nica_engine == :tnb_zones)
+
+if tnb_venue == :nicapetre
+  puts "XENAKIS/NICAPETRE: no piece of its own yet - nica_engine #{nica_engine}" \
+       "#{run_zones ? ' (borrowing the TNB zones as scaffolding)' : ' (parked)'}"
+end
+
+if run_zones
   tnb_sched = get(:xen_sched_ahead, 0.5)
 
   # --- ZONE I --------------------------------------------------------------
@@ -2520,4 +2540,16 @@ if get(:xen_venue, :mx) == :tnb
 
   puts "XENAKIS/TNB: zone I on outputs 1-4; zone IV (cube) reports its own " \
        "outputs on its first block."
+end
+
+# A venue that is deliberately silent must still SAY it is silent. Nothing in
+# this repo is allowed to be quiet without a reason on the screen - that is the
+# failure mode every other guard here exists to prevent.
+if tnb_venue == :nicapetre && !run_zones
+  live_loop "nica_parked_#{run_tag}".to_sym do
+    use_sched_ahead_time 2.0
+    puts "XENAKIS/NICAPETRE: parked (nica_engine :silent). " \
+         "Set :nica_engine, :tnb_zones to hear the scaffolding."
+    sleep 30
+  end
 end

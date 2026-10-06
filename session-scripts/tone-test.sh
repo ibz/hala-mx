@@ -16,7 +16,7 @@
 #                                   has, in sort -V order. A port may be given
 #                                   bare (AUX2, FL) or fully qualified
 #                                   (node:playback_AUX2) - the latter is how
-#                                   tnb-configure.sh passes a hand-ordered list,
+#                                   venue-interface.sh passes a hand-ordered list,
 #                                   since on an unknown card the channel order
 #                                   is exactly what is in question.
 #

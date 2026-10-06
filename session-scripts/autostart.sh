@@ -20,9 +20,9 @@
 # just burns the full 60 s before handing over anyway - so it is resolved from
 # the mode below rather than hard coded to the hall's Focusrite.
 #
-# --tnb's FIRST run cannot happen here. It has to establish the interface by
+# A discovering venue's FIRST run cannot happen here. It has to establish the interface by
 # ear, which means a terminal and somebody listening; from autostart it will
-# refuse with that message in the log. Run `./start-46.sh --tnb` by hand once
+# refuse with that message in the log. Run `./start-46.sh --<venue>` by hand once
 # at the venue, and every login after that is unattended like the others.
 #
 # Everything goes to $LOG - a desktop session has nowhere to print.
@@ -43,16 +43,21 @@ FOCUSRITE_RE='alsa_output\.usb-Focusrite_Scarlett_18i20_USB_[^.]+-00\.pro-output
 UMC_RE='alsa_output\.usb-BEHRINGER_UMC404HD_192k-00\.pro-output-0'
 
 case " $MODE " in
-  *" --tnb "*)
-    WANT="TNB's interface"
-    # From the saved config, if there is one. An unconfigured TNB has nothing
-    # to wait for - hand straight over and let start-46.sh say so properly.
-    conf=$("$HERE/tnb-configure.sh" --path 2>/dev/null)
-    SINK_RE=$(sed -n "s/^TNB_SINK='\(.*\)'$/\1/p" "$conf" 2>/dev/null | head -1 \
+  *" --tnb "*|*" --nicapetre "*|*" --nica "*)
+    # A venue whose interface was established by ear: wait for ITS saved sink.
+    # An unconfigured one has nothing to wait for - hand straight over and let
+    # start-46.sh say so properly.
+    case " $MODE " in
+      *" --tnb "*) V=tnb ;;
+      *)           V=nicapetre ;;
+    esac
+    WANT="$V's interface"
+    conf=$("$HERE/venue-interface.sh" "$V" --path 2>/dev/null)
+    SINK_RE=$(sed -n "s/^VENUE_SINK='\(.*\)'$/\1/p" "$conf" 2>/dev/null | head -1 \
               | sed 's/[][\.*^$+?(){}|]/\\&/g')
-    [ -n "$SINK_RE" ] || { WANT=""; echo "TNB is not configured yet - not waiting"; }
+    [ -n "$SINK_RE" ] || { WANT=""; echo "$V is not configured yet - not waiting"; }
     ;;
-  *" --simulation "*|*" --sim "*|*" -s "*|*" --tnb-simulation "*|*" --tnb-sim "*)
+  *" --simulation "*|*" --sim "*|*" -s "*|*"-simulation "*|*" --tnb-sim "*|*" --nica-sim "*)
     WANT="the UMC404HD"; SINK_RE="$UMC_RE" ;;
   *)
     WANT="the Focusrite"; SINK_RE="$FOCUSRITE_RE" ;;

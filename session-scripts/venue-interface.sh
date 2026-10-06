@@ -1,46 +1,46 @@
 #!/usr/bin/env bash
 #
-# tnb-configure.sh - work out, by ear, which interface TNB's 8-channel rig is
-# actually on and which of its ports carry outputs 1-8, then write that down so
-# it is only ever done once.
+# venue-interface.sh - work out, by ear, which interface a venue's rig is on
+# and which of its ports carry which output, then write that down so it is
+# only ever done once.
 #
-#   ./tnb-configure.sh              configure (or re-configure) the interface
-#   ./tnb-configure.sh -n 12        configure for a different channel count
-#   ./tnb-configure.sh --show       print the saved configuration
-#   ./tnb-configure.sh --path       print where the configuration lives
+#   ./venue-interface.sh <venue>            configure (or re-configure)
+#   ./venue-interface.sh <venue> -n 12      configure for a different count
+#   ./venue-interface.sh <venue> --show     print the saved configuration
+#   ./venue-interface.sh <venue> --path     print where it lives
+#
+# <venue> is a bare name - tnb, nicapetre - used only to name the config file
+# and to address the operator. Nothing in here knows what a venue sounds like.
 #
 # WHY THIS EXISTS: Hala MX's two interfaces are known quantities - start-46.sh
-# can name the Focusrite by pattern and the UMC by node name, and both have had
-# their port maps confirmed by ear already. TNB's has not: at the time of
-# writing nobody knows what will be in the rack, so there is nothing to hard
-# code. The venue is also the one place where getting it wrong is silent and
-# expensive, which is the same argument that made the mode a required argument
-# in the first place.
+# names the Focusrite by pattern and the UMC by node name, and both have had
+# their port maps confirmed by ear. A touring venue's rack has not, so there is
+# nothing to hard code - and a venue is the one place where getting it wrong is
+# silent and expensive, which is the argument that made the mode a required
+# argument in the first place.
 #
-# So --tnb starts by asking, once, and then never asks again. What gets asked
-# is exactly the three things that were WRONG at Hala MX before somebody put a
-# tone on each jack and listened (see README 7d):
+# So those modes ask once, the first time, and never again. What gets asked is
+# exactly the three things that were WRONG at Hala MX before somebody put a
+# tone on each jack and listened (README 7d):
 #
 # 1. THE ALSA PROFILE. A multichannel USB interface usually boots in a consumer
 #    "HiFi"/"Analog Stereo" profile and presents a pile of 2-channel sinks, not
-#    one multichannel node. Only the "pro-audio" profile exposes discrete
-#    playback_AUX0..N ports. WirePlumber remembers the choice per card, but the
-#    saved config records it anyway and start-46.sh re-applies it every run -
-#    there is no guarantee it survives a power cycle or somebody else's poke.
+#    one multichannel node. Only "pro-audio" exposes discrete playback_AUX0..N
+#    ports. WirePlumber remembers the choice per card, but the saved config
+#    records it anyway and start-46.sh re-applies it every run - nothing
+#    guarantees it survives a power cycle or somebody else's poke.
 #
 # 2. THE PORT ORDER. PipeWire's "Line Output N+M" labels are an ACP guess and
 #    are often wrong, and this script's own sort -V over the port names is also
-#    only a guess. On the 18i20 the first 8 AUX ports happened to be the 8 rear
-#    analog outs, but AUX8-11 were a headphone jack and S/PDIF, so the naive
-#    "first 12 ports" would have put four channels of the piece into a
-#    headphone socket. Hence the sweep, and hence the ability to answer it with
-#    an explicit, out-of-order list.
+#    only a guess. On the 18i20 the first 12 AUX ports would have put four
+#    channels of the piece into a headphone socket. Hence the sweep, and hence
+#    being able to answer it with an explicit, out-of-order list.
 #
 # 3. THE INTERFACE'S OWN ROUTING MATRIX. The 18i20 needed `amixer` work beyond
-#    anything PipeWire could see. This script cannot know what the equivalent
-#    is on an interface it has never met, so it does not pretend to: if the
-#    sweep is silent on some channels, that is the layer to go and look at, and
-#    the sweep is what tells you to look.
+#    anything PipeWire could see. This script cannot know the equivalent on an
+#    interface it has never met, so it does not pretend to: if the sweep is
+#    silent on some channels, that is the layer to go and look at, and the
+#    sweep is what tells you to look.
 #
 # Nothing here is guessed on the operator's behalf. The script proposes, plays
 # the tones, and only writes the file once somebody says they heard the right
@@ -50,11 +50,22 @@ set -uo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
 TONE="$HERE/tone-test.sh"
 
+# The venue comes first and is required: a config file that does not say which
+# rack it describes is the beginning of playing one venue's port map in another.
+VENUE="${1:-}"
+case "$VENUE" in
+  ''|-*)         echo "usage: $(basename "$0") <venue> [-n N] [--show] [--path]"
+                 echo "       venue is a bare name, e.g. tnb or nicapetre"; exit 1 ;;
+  *[!a-z0-9_-]*) echo "venue name must be lowercase letters, digits, - or _"; exit 1 ;;
+esac
+shift
+LABEL=$(printf '%s' "$VENUE" | tr '[:lower:]' '[:upper:]')
+
 # Machine-local, not in the repo: the node name embeds the interface's USB
 # serial number, so this describes one physical rack rather than the piece.
-# start-46.sh asks for it with `tnb-configure.sh --path` rather than rebuilding
-# the expression, so there is one definition of where it lives.
-CONF="${HALA_TNB_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/hala-mx/tnb-card.conf}"
+# start-46.sh asks for it with `venue-interface.sh <venue> --path` rather than
+# rebuilding the expression, so there is one definition of where it lives.
+CONF="${HALA_VENUE_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/hala-mx/${VENUE}-card.conf}"
 
 N=8
 ACTION=configure
@@ -63,7 +74,7 @@ while [ $# -gt 0 ]; do
     --path)     ACTION=path; shift ;;
     --show)     ACTION=show; shift ;;
     -n)         N="${2:-}"; shift 2 || { echo "-n needs a number"; exit 1; } ;;
-    -h|--help)  sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          echo "unknown argument: $1"; exit 1 ;;
   esac
 done
@@ -71,7 +82,7 @@ case "$N" in ''|*[!0-9]*|0) echo "-n: not a positive number: $N"; exit 1 ;; esac
 
 if [ "$ACTION" = path ]; then echo "$CONF"; exit 0; fi
 if [ "$ACTION" = show ]; then
-  [ -r "$CONF" ] || { echo "no TNB configuration yet ($CONF)"; exit 1; }
+  [ -r "$CONF" ] || { echo "no $LABEL configuration yet ($CONF)"; exit 1; }
   cat "$CONF"; exit 0
 fi
 
@@ -90,7 +101,7 @@ pactl info >/dev/null 2>&1 || {
 
 # This is a conversation, not a batch job: it plays tones and waits to be told
 # what was heard. Failing early beats hanging on a read that can never return.
-[ -t 0 ] || { echo "tnb-configure.sh needs a terminal - run it by hand at the venue."; exit 1; }
+[ -t 0 ] || { echo "venue-interface.sh needs a terminal - run it by hand at the venue."; exit 1; }
 
 # --- what the graph has -----------------------------------------------------
 # `pactl list` is prose, not a format. Parsed here once, into TSV, rather than
@@ -172,7 +183,7 @@ expand_spec() {
   done
 }
 
-echo "TNB interface setup - $N outputs"
+echo "$LABEL interface setup - $N outputs"
 echo "config file: $CONF"
 if [ -r "$CONF" ]; then
   echo
@@ -200,7 +211,7 @@ for row in "${CARDS[@]}"; do
 done
 echo
 
-sel=$(ask "which card is the TNB rig on? [1-${#CARDS[@]}] " "")
+sel=$(ask "which card is the $LABEL rig on? [1-${#CARDS[@]}] " "")
 case "$sel" in ''|*[!0-9]*) echo "not a number: $sel"; exit 1 ;; esac
 { [ "$sel" -ge 1 ] && [ "$sel" -le "${#CARDS[@]}" ]; } || { echo "out of range: $sel"; exit 1; }
 IFS="$SEP" read -r CARD CARD_ACTIVE CARD_PRO CARD_DESC _ <<< "${CARDS[$((sel - 1))]}"
@@ -324,7 +335,7 @@ while :; do
       fi
       if [ "${#idx[@]}" -ne "$N" ]; then
         echo "that is ${#idx[@]} port(s); $N outputs are wanted."
-        yn=$(ask "use it anyway, and run TNB on ${#idx[@]} outputs? [y/N] " n)
+        yn=$(ask "use it anyway, and run $LABEL on ${#idx[@]} outputs? [y/N] " n)
         case "$yn" in [Yy]*) N="${#idx[@]}" ;; *) continue ;; esac
       fi
       CHOSEN=(); for k in "${idx[@]}"; do CHOSEN+=("${ALL[$((k - 1))]}"); done
@@ -350,25 +361,26 @@ if [ -r "$CONF" ]; then
   cp "$CONF" "$CONF.bak.$(date +%Y%m%d-%H%M%S)"
 fi
 cat > "$CONF" <<EOF
-# TNB's interface, confirmed by ear on $(date '+%Y-%m-%d %H:%M:%S').
-# Written by session-scripts/tnb-configure.sh; read by start-46.sh --tnb.
+# $LABEL's interface, confirmed by ear on $(date '+%Y-%m-%d %H:%M:%S').
+# Written by session-scripts/venue-interface.sh; read by start-46.sh --$VENUE.
 #
-# Machine-local on purpose: TNB_SINK embeds this interface's USB serial, so
+# Machine-local on purpose: VENUE_SINK embeds this interface's USB serial, so
 # this describes one physical rack and not the piece. If the rack changes,
-# re-run:  ./session-scripts/start-46.sh --tnb --reconfigure
+# re-run:  ./session-scripts/start-46.sh --$VENUE --reconfigure
 #
-# TNB_PORTS is in CHANNEL ORDER - entry 1 is output 1 - and is used verbatim,
+# VENUE_PORTS is in CHANNEL ORDER - entry 1 is output 1 - and is used verbatim,
 # not re-derived, because the order was established by listening and nothing
 # in the graph records it.
-TNB_CARD='$CARD'
-TNB_PROFILE='$CARD_PROFILE'
-TNB_SINK='$SINK'
-TNB_OUTPUTS=$N
-TNB_PORTS='$PORTS'
+VENUE_NAME='$VENUE'
+VENUE_CARD='$CARD'
+VENUE_PROFILE='$CARD_PROFILE'
+VENUE_SINK='$SINK'
+VENUE_OUTPUTS=$N
+VENUE_PORTS='$PORTS'
 EOF
 
 echo
 echo "written: $CONF"
 sed 's/^/    /' "$CONF"
 echo
-echo "TNB is configured. From here on:  ./session-scripts/start-46.sh --tnb"
+echo "$LABEL is configured. From here on:  ./session-scripts/start-46.sh --$VENUE"
