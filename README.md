@@ -2373,6 +2373,397 @@ compensation applied *after* all saturation — a shelf on the output stage, tun
 the room's measured −5.4 dB — which is a rig decision, not a code one, and is not
 implemented here.
 
+## 11. TNB — two zones in the Hol
+
+A **different piece on the same engine**, not a different room for the same
+one. `--tnb` installs `tnb-buffer.rb` rather than `sonic-pi-buffer.rb`; both
+load `xenakis.rb` and pick their half of it with `xen_venue`.
+
+Nothing from §8 applies here. There is no breath, so no inhale, no exhale, no
+M=0, no vacuum, no void and no spill — and therefore no `xen_cycle_dur`, and
+nothing that reads it.
+
+### 11a. The two zones
+
+From Carmen Petrea's four-zone brief, the two **ends** of its
+point → line → surface → network progression, with the two middle zones (the
+*Metastaseis* bundle and the Philips surface) not built. That is the maximum
+contrast two quads can carry, and both of her zones are rooted in quadraphony —
+Zone I is tagged *"origine: quadrofonie → masă"*, Zone IV *"quasi-quadrofonic →
+memorie istorică"*. The same four-channel format read in opposite directions.
+
+| | Zone I | Zone IV |
+|---|---|---|
+| | *nor stocastic comprimat* | *câmp fragmentat / rețea probabilistică* |
+| outputs | 1–4 | 5–8 |
+| engine | `play_cloud_phase` | `play_nomos_phase` |
+| `xen_pan_mode` | `:continuous` | `:discrete` |
+| reads as | a mass with no privileged direction | figures returning transformed |
+| quad size in the room | **tight, 5–6 m** | **wide, 8–10 m** |
+
+**The only software setting that separates them is the pan mode.** Half the
+distinction is rigged, not coded: four speakers close together fuse into a
+volume, the same four spread wide stay legible as four points.
+
+**No ambisonics.** With four speakers per zone, 2D order 1 is the ceiling, and
+in a walk-through nobody is ever in the sweet spot — the region where an
+order-*M* decode holds is about `M·c / 2πf`, which at order 1 and 1 kHz is five
+centimetres. What actually distinguishes diffuse from focused for a walking
+listener is how many speakers carry a source, which is what `xen_pan_mode`
+already decides. Zone IV is *quasi-quadrofonic* by specification and wants
+discrete channels, not a decoder smearing them.
+
+### 11b. Zone I — why a drifting window, not a Gaussian
+
+The brief says *distribuție gaussiană în volum*. A Gaussian over a quad's
+channel coordinate puts its peak on one side of the room and keeps it there —
+a permanent privileged direction, the one thing this zone is specified not to
+have. The brief's Gaussian is a distribution in a **volume**, and a volume is
+what four horizontal speakers cannot render.
+
+So: two overlapping clouds on a **ring**, uniformly scattered, with a *static*
+span — there is no breath for the window to travel down. What moves is the
+window itself. Each cloud's centre random-walks around the ring between blocks,
+one broad (half-width 1.7) and one narrow (0.9), so the density thickens and
+thins locally and the thick part wanders. That is *"variații locale de
+densitate"* without nailing it to a compass point, and over time the
+distribution is uniform.
+
+**`ring: true` is what makes this work.** MX's twelve monitors carry a drawing
+that runs from one end of the hall to the other, so its channel coordinate is a
+*line* and channel 12 is the end of it. A quad is a *circle*: left as a line
+there is a seam between speakers 4 and 1 that no grain crosses — and a seam is
+a privileged direction. With `ring`, position runs over `[1, rig+1)` and the
+pan off the last speaker lands back on the first. Ruby's `%` is floored, so a
+window that has drifted off either end wraps without a special case.
+
+#### Blocks must overlap, or the mass pulses
+
+A Poisson block ends at its **last grain**, not at `dur`, and the next begins at
+its first — so back-to-back blocks leave a hole on every channel at once, of
+mean `2/lambda`. At 26 grains/s that is ~77 ms typically and, being
+exponentially distributed, 300 ms often enough to hear. In a zone whose whole
+business is an unbroken mass that is not a seam, it is a **pulse** — and it
+arrives on the block period, which is the one rhythm this zone must not have.
+
+`tnb_z1_xfade` fixes it the same way the beds are fixed at the breath boundary
+(§8h): the schedule still runs the full `dur`, but `play_cloud_phase` **returns
+`xfade` early**, so the next block starts while this one is still sounding, and
+the two tapers cross in the overlap.
+
+**The taper is `sqrt`, not linear.** Grains are incoherent, so *power* adds. Two
+linear ramps sum to `a² + (1−a)²`, which dips 3 dB at the crossing. With
+`sqrt(f)` against `sqrt(1−f)`:
+
+```
+taper_out² + taper_in² = (dur − t)/x + (t − step)/x = x/x = 1
+```
+
+exactly flat — the same equal-power law the panner already uses, for the same
+reason. Measured across every seam at 10 ms resolution: **0.000% deviation.**
+
+The window handover moves with it. The block still travels `span0 → span1`
+across the whole of `dur`, but the next one starts at `dur − xfade`, so what it
+begins from is the window's position *there*. Carrying `span1` instead would
+nudge the window forward by `xfade/dur` of a drift step every block — a small
+systematic drift riding on the random one, which would eventually show up as
+the thing never coming back.
+
+#### The holes were not at the boundary
+
+The cross-fade above was reported as not having fixed it, so the schedule was
+**measured** rather than reasoned about — 18 consecutive blocks driven exactly
+as the live loop drives them, concatenated on one timeline:
+
+| | before | after |
+|---|---|---|
+| longest silence, whole rig | 232 ms | **92 ms** |
+| longest silence, **one channel** | **898 ms** | **195 ms** |
+| density dip per 0.5 s bin | 45% of mean | **71%** |
+
+The cross-fade *had* worked — rig-wide silences next to a block boundary went
+from 10 of 23 to 1 of 23. The holes were simply somewhere else, and there were
+three causes, none of them the boundary:
+
+**1. The windows are a shared process.** Two drifting clouds, 3.4 and 1.8 wide
+on a ring of 4, cover the ring between them — but *which speaker* each grain
+lands on is a multinomial accident. A shared process cannot promise anything to
+any one channel, and a listener standing by one speaker is listening to exactly
+that promise. The fix is `tnb_z1_floor`: **four clouds, one centred on each
+speaker**, each with its own near-deterministic process at `shape 16`, carrying
+70% of the density. The drifting windows stay on top and are still what
+*"variații locale de densitate"* means — they thicken a floor now instead of
+being the whole of it.
+
+**2. The density was MX's, and MX is a different problem.** 26 grains/s was the
+same per-channel density as MX's inhale. But MX's clouds are a *gesture crossing
+a hall*; this is a *standing mass* that someone parks next to. 56.
+
+**3. The chain was cutting its own tails.** Each channel's `with_fx` closed at
+exactly `dur`, a few milliseconds after the last onset — so a 150 ms grain fired
+just before it was truncated, on every channel, on every boundary. **A gap in
+the signal under a schedule that looked continuous**, which is why no amount of
+cross-fading removed it. `fx_tail` keeps the chain up 0.35 s past the last grain.
+
+The floor also draws only cuts ≥ 110 ms (about 30% of each pool), so at ~14
+onsets/s/channel the grains *overlap* rather than merely adjoin — the difference
+between a mass and a fast stream of points. Measured: 9 onset gaps per channel
+longer than a grain, over 177 seconds.
+
+`fold: false` goes with it: the fold exists to squeeze MX's twelve-channel
+drawing onto four outputs in the studio, and TNB authors its positions in
+output coordinates already.
+
+> **The local is called `cyclic`, not `ring`** — the same trap as `stagger` vs
+> `spread` in the atmos loader, and a worse one. `ring` is a Sonic Pi built-in,
+> and `PreParser` *refuses the whole buffer* if it finds `ring =` anywhere
+> (`preparser.rb:27`). It checks every fn whose `:returns` is `:ring`,
+> `:vector` or `:ramp` — fourteen of them:
+>
+> `bools doubles halves knit line midi_notes note_range octs ramp range ring spread stretch vector`
+>
+> It is a **plain text match over the whole file, comments included**, and
+> `run_file` goes through the same `__spider_eval` — so this is not a workspace
+> rule, it kills the *library* at load:
+>
+> ```
+> Runtime Error: [buffer eval, line 952]
+>  You may not use the built-in fn names as variable names.
+>  You attempted to use: ring
+> ```
+>
+> The *option* stays `ring:`. A hash key is never followed by `=`, so it does
+> not match, and `ring` is the right word for what it does.
+
+### 11c. Zone IV — the rotation group of the cube
+
+**Rebuilt twice.** First from a stochastic firing network to D₄, then from D₄ to
+the cube's full rotation group. Both verdicts came from the room and both were
+right.
+
+**Why D₄ was not enough.** It is the symmetry group of the *square*, justified
+here as "the quad is the cube's horizontal section". True, and insufficient:
+projecting the cube onto a horizontal plane collapses 24 rotations into 8 and
+throws away the dimension that tells a rotation from a reflection. Judged as
+*"the axial panning does not feel like a cube"* — correct, because with four
+horizontal speakers and no height there is no cube there to feel. **Turning a
+square is turning a square.**
+
+**So the cube gets its third dimension from the one place this piece has ever
+had height: Blauert's bands.** MX fakes a 4 m ceiling over twelve monitors at
+1.8 m with a band pair (+9 dB at 8372 Hz = above, −6 dB at 3136 Hz =
+behind/below, one octave wide — §5). The same fiction carries the cube's z axis:
+
+```
+a vertex (x, y, z) of the cube, x,y,z in {-1,+1}
+  (x, y)  ->  which of the four speakers     - real, physical
+    z     ->  Blauert tilt, above or below   - psychoacoustic
+```
+
+All 24 rotations are then genuinely distinct, and **three kinds of move sound
+like three different things:**
+
+| rotation about | what you hear |
+|---|---|
+| the **vertical** axis | the figure turns round the room, height unchanged |
+| a **horizontal** axis | the figure turns *over* — what was above is below, and the complex plays **backwards** |
+| a **body diagonal** | height and horizontal extent **trade places** |
+
+That last one is the cube-specific move and the reason for all of this. A
+`:held` complex is a whole **face**: on the top face it is four speakers at one
+height; a body-diagonal rotation turns it into a side face, which is two
+speakers at two heights. **No rotation of a square can do that, because a square
+has nothing to trade.** Verified — `held` under the identity gives speakers
+`[5,6,7,8]` at one height, under a body diagonal `[5,8]` at both.
+
+**Retrograde is geometric, not a separate rule.** A complex plays backwards
+exactly when the rotation sends the top face's normal below the horizon — when
+the figure has been turned over. Reflections are not used at all: the group is
+the **24 rotations**, as in *Nomos Alpha*, not the full 48 with mirrors.
+
+**Five complexes**, each a feature of the cube rather than a list of speakers:
+
+| | duration | events | cube feature |
+|---|---|---|---|
+| `:point` | ~0.2 s | 1 | a vertex |
+| `:burst` | ~0.5 s | 6 | an edge |
+| `:line` | ~1.6 s | ~22 | a path of 3 vertices |
+| `:held` | ~3.2 s | ~80 | a **face** |
+| `:rest` | ~1.4 s | **0** | — |
+
+A 16× range of duration and an 80× range of density. `:rest` is in the alphabet
+deliberately — *Nomos Alpha* is sectional, and a Poisson process cannot make a
+silence that means anything because every gap is just a gap.
+
+**No randomness in the structure.** The complex sequence and the rotation
+sequence are fixed words read cyclically. Chance is confined to which cut of the
+pool each grain takes — the texture *inside* a complex.
+
+**Height costs eight chains, not four.** Events are grouped by *(speaker,
+height)*, because the band pair *is* the height: a side face puts two vertices
+above and two below on the same two speakers, and they must not share a chain or
+the cue cancels. The pair is set once per chain rather than per grain, and is
+skipped entirely at `tnb_z4_height 0` — two transparent FX still cost
+per-sample work.
+
+> **A word of `Z` alone is the old square, turning.** `X` and `Y` are the whole
+> third dimension. If it stops feeling like a cube, look at `tnb_z4_word` first.
+
+#### The top end has two brakes
+
+Judged in the room as *"high pitched sounds, quite disturbing"*, and measured,
+the complaint was exact. **Three multipliers stack** on a grain's playback rate:
+
+| | range |
+|---|---|
+| where the reference vertex landed | ×0.84 … ×1.19 |
+| the register sieve, at `tilt 4.0` | ×0.63 … ×1.587 |
+| the complex's own contour (`:line` glides) | ×0.80 … ×1.60 |
+
+Unbounded the product reaches **×3.02 — plus nineteen semitones** — with 3.4% of
+grains above +12. Shatter material transposed up a twelfth is a shriek.
+
+Worse, **the two effects reinforced**. `:line` ramps its filter up alongside the
+glide, so the brightest transposition arrived with the filter at its most open,
+7459 Hz. Nothing downstream catches that: the tanh is a soft ceiling on *level*,
+not on spectrum.
+
+- **`tnb_z4_rate_max`** caps the *static* part only (`tr`), divided by each
+  complex's own contour ceiling — so a complex keeps its internal shape. Capping
+  the final rate instead would flatten the top of every glissando, which is the
+  gesture, not the fault.
+- **`tnb_z4_bright`** makes the filter follow the transposition *down*: a grain
+  at rate `r` has its spectrum shifted up `12·log2(r)`, so dropping the cutoff by
+  the same amount holds brightness constant. At 1.0 the glissando cancels
+  itself; 0.7 leaves it opening by about 5 semitones instead of 19. **One-sided**
+  — it never *opens* the filter for a slowed grain, or `:held`'s dark sustain
+  would brighten, and `:held` was not the complaint.
+
+Measured on the hottest 5% of grains:
+
+| | before | after |
+|---|---|---|
+| peak transposition | +19.1 st | **+12.0 st** |
+| mean filter at the top | 6379 Hz | **4472 Hz** |
+| grains above +12 st | 3.4% | **0%** |
+
+`:line` still glides 0.67 → 1.35 and still opens 4186 → 6060 Hz, so the
+*Metastaseis* gesture survives. If it is still shrill, in order: raise
+`tnb_z4_bright` toward 0.9, drop `tnb_z4_rate_max` to 1.7, then drop
+`tnb_z4_height`. Cut `tnb_z4_tilt` last — it is the biggest single contributor
+to the top end, and also the thing that stops the score repeating.
+
+#### The period had to be searched, not chosen
+
+With D₄ the state space was forty, and the first attempt — two coprime word
+lengths, as the textbook advice suggests — came back **exactly every 14
+complexes, about 20 seconds.** Coprime lengths are not enough: coincidences
+between the cycles land long before their product does.
+
+Two sieves fix it, both Xenakis's own device — in *Nomos Alpha* the group governs
+transformation while separate sieves govern the other parameters, each on its own
+period. `tnb_z4_shear` makes the complex index gain one extra step every *n*
+complexes; `tnb_z4_tilt` / `tnb_z4_tilt_every` run a five-step register pattern
+on its own cycle.
+
+The parameters were then **swept over 2400 complexes**, scoring the longest
+verbatim stretch whose two occurrences both fall inside one ten-minute visit —
+the only repeat a listener can experience:
+
+| | |
+|---|---|
+| longest verbatim stretch in a visit | **2 complexes (~2 s)** |
+| a `:held` figure recurs every | **~6 complexes (~6 s)** |
+| the whole score returns after | **1896 complexes (~34 min)** |
+| distinct shapes a face takes | **21 of 24** |
+
+A figure is familiar within seconds, the score is not a tape, and the face really
+does get moved all over the cube. **Change one and re-measure; do not guess.**
+
+### 11d. Soloing a zone — `tnb_focus`
+
+`:all | :z1 | :z4`, read every block, so it can be flipped while the piece
+runs exactly like MX's `xen_focus`.
+
+This is how TNB gets worked on in the studio. `--tnb-simulation` has one quad,
+both zones fold onto it and **sum**, and a summed mass and constellation tell
+you nothing about either. Solo gives the zone under test all four speakers —
+the only way to hear Zone I's ring or Zone IV's spacing at all, since both are
+statements about where four speakers are.
+
+```ruby
+set :tnb_focus, :z1    # the mass, on all four
+set :tnb_focus, :z4    # the constellation, on all four
+set :tnb_focus, :all   # both, summed - balance only
+```
+
+**The muted zone keeps its clock.** Its window goes on drifting and its map
+goes on rewiring while you listen to the other one, so coming back is like
+coming back to a room rather than resuming a tape. Same rule `xen_focus`
+follows: muting changes what you hear, never the timing.
+
+> **A zero rate is a supported way to silence a zone, now.** It was not: the
+> grain interval is `-log(1 - rand) / (lambda * shape)`, which at `lambda 0` is
+> `Infinity` for every `rand` but one — and `0 / 0 = NaN` when `rand` returns
+> exactly `0.0`. `NaN >= dur` is **false**, so the `break` never fires and the
+> loop spins forever inside a `live_loop`: the zone goes silent, stays silent,
+> and nothing errors anywhere. Rare per block, near-certain over an
+> installation day. Both engines now skip a zero rate outright. Prefer
+> `tnb_focus` anyway — it also skips building the schedule.
+
+### 11e. No global period
+
+MX's cycle is meant to be heard as a cycle. Here the opposite. The zones
+free-run in separate `live_loop`s at different block lengths (11.0 s and
+13.0 s), and what evolves inside each is a **random walk** rather than an
+oscillator — so there is no period to lock to and nothing for a visitor walking
+the corridor to catch repeating. The block length is only how far ahead the
+grain schedule is built; it is not a cycle and nothing is aligned to it.
+
+### 11f. `xen_venue` must be stated on both desks
+
+**Time State survives Stop.** If `xen_venue` were set only by `tnb-buffer.rb`,
+then after a TNB session the MX desk would come up with `:tnb` still in Time
+State, the breath loop would park itself, and the piece would be silent with no
+error anywhere — the same shape of failure as the oversized desk and the
+orphaned tau. Both desks state their venue. It costs `sonic-pi-buffer.rb` 69
+bytes it does not really have (113 left under the ceiling), which is why the
+rationale is here and the desk carries one line.
+
+### 11g. The room
+
+Hol, Corp B, Intercontinental side — 572 m² over a 49.70 m façade, ~11.5 m
+average depth, broken along its north side by three vertical-circulation cores.
+**Bay B**, between the middle stair core and the east lift core (~11.7 m ×
+~9–12 m), is the recommended stretch: it is the longest uninterrupted one, the
+middle core is the only lift-free neighbour, and it avoids both the four-lift
+bank at the west end and the `CASA BILETE` ticketing corner at the east.
+
+Zone I goes **against the glazing** — a full-height glass wall is a large
+specular reflector and the carpet has already taken the top end, so the
+reflections thicken the mass for free. Zone IV goes **inland against the
+cores**, where it stays dry and a hard surface behind a speaker does not double
+it into an image and blur the point. Place them on the **diagonal**, Zone I at
+the bay's west end and Zone IV at its east: that gives ~15 m of separation
+inside an 11.7 m bay, and walking east takes you from mass to network, which is
+the direction people move anyway.
+
+### 11h. Not built yet
+
+**The atmosphere beds.** Zone I would take them — a bed under a dense mass is
+the obvious thickener — but the bed machinery (stretch to the cycle, the
+spectral partials, the rotation, the decorrelated pairs) is written against
+`cycle_dur` and has no meaning without a breath. Grains only, both zones, for
+now. Zone IV should never have beds: continuity is precisely what it is
+specified not to have.
+
+**Nothing has been heard in the room.** Both engines are verified by lifting
+`play_cloud_phase` and `play_network_phase` verbatim out of `xenakis.rb` into a
+shim and exercising them — MX's twelve-channel and folded-to-four paths
+unchanged, Zone I staying inside 1–4 with no dead seam and wrapping correctly
+when its window drifts off the ring, Zone IV staying inside 5–8, decaying by
+generation and terminating. That is arithmetic, not sound.
+
 ## Layout
 
 ```
@@ -2396,6 +2787,8 @@ session-scripts/                   build + launch + audio helpers
   restore-sonicpi-config.sh        puts audio-settings.toml back
   set-buffer-2048.sh, try-alsa.sh  5.0-era experiments; kept for reference only
   start-session.sh                 the 5.0 launcher, superseded by start-46.sh
+sonic-pi-buffer.rb                 the Hala MX desk (xen_venue :mx)
+tnb-buffer.rb                      the TNB desk - two zones, no breath (section 11)
 monitors.tsv                       physical positions of the 12 monitors (cm)
 nodes.tsv                          theoretical breathing path, 11 nodes
 TODO.md                            open tuning items

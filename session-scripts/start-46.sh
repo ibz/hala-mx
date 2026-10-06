@@ -8,6 +8,10 @@
 #   ./start-46.sh --simulation       studio:   4 outputs, UMC404HD,         bleep ON
 #   ./start-46.sh --tnb-simulation   studio:   4 outputs, UMC404HD,         bleep ON
 #
+#   The --tnb modes are a DIFFERENT PIECE, not a different room: two zones with
+#   no breath, driven by tnb-buffer.rb. The others install sonic-pi-buffer.rb.
+#   Both desks load the same xenakis.rb and select with xen_venue.
+#
 #   --keep          launch with whatever Buffer 0 already had (no desk install)
 #   --reconfigure   --tnb only: redo the interface setup before launching
 #   <number>        override the output count for this run:
@@ -114,7 +118,15 @@ HERE="$(dirname "$(readlink -f "$0")")"
 # Must agree with build-sonicpi-46.sh, which produces this binary. Both
 # default to ~/src/sonic-pi and both honour $SONIC_PI_SRC.
 SP="${SONIC_PI_SRC:-$HOME/src/sonic-pi}/app/build/gui/sonic-pi"
-BUFFER="$HERE/../sonic-pi-buffer.rb"
+# ONE DESK PER PIECE, not one desk patched two ways. MX's is 182 bytes under
+# the 16320-byte OSC ceiling that Run silently dies past (see below), so TNB's
+# two zones could not be added to it even if they belonged there - and they do
+# not: TNB has no breath, no M=0 and no vacuum, so three quarters of MX's desk
+# would be inert knobs sitting next to the live ones. Both desks load the same
+# xenakis.rb and pick their half of it with xen_venue.
+BUFFER_MX="$HERE/../sonic-pi-buffer.rb"
+BUFFER_TNB="$HERE/../tnb-buffer.rb"
+BUFFER="$BUFFER_MX"
 WS="$HOME/.sonic-pi/store/default/workspace_zero.spi"
 BAKDIR="$HOME/.sonic-pi/workspace-backups"
 TOML="$HOME/.sonic-pi/config/audio-settings.toml"
@@ -243,7 +255,7 @@ tnb_load() {
 }
 
 usage() {
-  sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-1}"
 }
 
@@ -276,12 +288,12 @@ fi
 # how many outputs the drawing folds onto, whether the reference bleep is
 # audible, and - VENUE - whether an under-routed rig is a warning or a refusal.
 case "$MODE" in
-  production)      N="${N:-12}"; BLEEP=false; VENUE=1 ;;
-  tnb)             N="${N:-8}";  BLEEP=false; VENUE=1 ;;
-  simulation)      N="${N:-4}";  BLEEP=true;  VENUE=0 ;;
-  tnb-simulation)  N="${N:-4}";  BLEEP=true;  VENUE=0 ;;
+  production)      N="${N:-12}"; BLEEP=false; VENUE=1; BUFFER="$BUFFER_MX"  ;;
+  tnb)             N="${N:-8}";  BLEEP=false; VENUE=1; BUFFER="$BUFFER_TNB" ;;
+  simulation)      N="${N:-4}";  BLEEP=true;  VENUE=0; BUFFER="$BUFFER_MX"  ;;
+  tnb-simulation)  N="${N:-4}";  BLEEP=true;  VENUE=0; BUFFER="$BUFFER_TNB" ;;
 esac
-echo "MODE: $MODE  ($N outputs, bleep $BLEEP)"
+echo "MODE: $MODE  ($N outputs, bleep $BLEEP, desk $(basename "$BUFFER"))"
 echo
 
 [ -x "$SP" ] || { echo "not built: $SP"; exit 1; }
@@ -605,7 +617,7 @@ else
     fi
     mkdir -p "$(dirname "$WS")"
     cp "$want" "$WS"
-    echo "Buffer 0: installed from sonic-pi-buffer.rb ($MODE)"
+    echo "Buffer 0: installed from $(basename "$BUFFER") ($MODE)"
   fi
 fi
 echo

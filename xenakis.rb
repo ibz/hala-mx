@@ -637,6 +637,69 @@ define :play_cloud_phase do |o|
   sweep      = o[:traj_mode] == :sweep
   traj_cyc   = o[:traj_cycles] || 3.0
   traj_width = o[:traj_width]  || 0.12
+  # --- WHERE THIS PHASE SITS ON THE RIG --------------------------------------
+  #
+  # chan_base: this phase's channel 1 is hardware output chan_base + 1. MX has
+  # one drawing spread across the whole rig and leaves this at 0. TNB runs two
+  # zones at once on one scsynth - Zone I on outputs 1-4, Zone IV on 5-8 - and
+  # this is the only thing in here that has to know that.
+  base = o[:chan_base] || 0
+  # ring: the channel coordinate is CYCLIC.
+  #
+  # MX's twelve monitors are two hexagons carrying a drawing that runs from one
+  # end of the hall to the other, so its coordinate is a LINE: channel 12 is
+  # the end of it and nothing pans off it. A quad is a CIRCLE. Left as a line,
+  # there is a seam between speakers 4 and 1 that no grain ever crosses - and a
+  # seam is a privileged direction, which is the one thing Zone I is specified
+  # not to have ("fara directie privilegiata"). With ring on, position runs
+  # over [1, rig+1) and the pan off the last speaker lands back on the first.
+  #
+  # NB the local is `cyclic`, NOT `ring` - same trap as `stagger` vs `spread`
+  # in the atmos loader. `ring` is a Sonic Pi built-in that returns a ring, and
+  # PreParser REFUSES any buffer containing `ring =` (preparser.rb:27, against
+  # every fn whose :returns is :ring, :vector or :ramp - 14 of them: bools
+  # doubles halves knit line midi_notes note_range octs ramp range ring spread
+  # stretch vector). It is a plain text match over the whole file, comments
+  # included, and run_file goes through the same __spider_eval, so this kills
+  # the LIBRARY at load with a PreParseError, not just a workspace. The OPTION
+  # stays `ring:` - a hash key is never followed by `=`, so it does not match.
+  cyclic = o[:ring] ? true : false
+  # Channel index -> hardware output. On a ring, rig+1 comes back to 1, and so
+  # does anything further round: Ruby's % is floored, so a window that has
+  # drifted off either end wraps correctly without a special case.
+  out = lambda { |c| (cyclic ? ((c - 1) % o[:rig]) + 1 : c) + base }
+  # fold: squeeze the drawing onto however many outputs exist. That is MX's
+  # problem - twelve monitors' worth of drawing played on four in the studio -
+  # and it is wrong for TNB, which authors its positions in output coordinates
+  # already. Defaults on, so MX is untouched.
+  fold = o[:fold].nil? ? true : o[:fold]
+  # --- CROSS-FADE, so consecutive blocks OVERLAP instead of abutting --------
+  #
+  # A Poisson block ends at its last grain, not at dur, and the next begins at
+  # its first - so back-to-back blocks leave a hole on EVERY channel at once,
+  # of mean 2/lambda and exponentially distributed, which at 26 grains/s is
+  # ~77 ms typical and 300 ms often enough to hear. In a zone whose whole
+  # business is an unbroken mass that is not a seam, it is a pulse, and it
+  # arrives on the block period - the one rhythm this zone must not have.
+  #
+  # Same fix the beds already use at the breath boundary (README 8h): the
+  # schedule still runs the full dur, but the CALLER returns xfade early, so
+  # the next block starts while this one is still sounding. The two tapers
+  # below then cross in the overlap.
+  #
+  # sqrt, not linear. Grains are incoherent, so POWER adds: two linear ramps
+  # sum to a^2 + (1-a)^2, which dips 3 dB at the crossing. sqrt(f) against
+  # sqrt(1-f) gives f + (1-f) = 1, flat - the same equal-power law the pan
+  # already uses, for the same reason.
+  xfade = o[:xfade] || 0.0
+  xfade = [xfade, o[:dur] * 0.4].min
+  # fx_tail: how long the channel's chain stays up AFTER its last grain. The
+  # chain used to close at exactly dur, which is a few ms after the last onset
+  # - so a 150 ms grain fired at dur - 0.02 was CUT when with_fx exited, on
+  # every channel, on every block boundary. Not a gap in the schedule, which is
+  # why no amount of cross-fading removed it: a gap in the signal, under a
+  # schedule that looked continuous. Defaults to 0, so MX is untouched.
+  fx_tail = o[:fx_tail] || 0.0
   # --- the drawing's bounds, so we can fold it onto a smaller rig ---
   lo_d = o[:clouds].map { |c| [c[:span0][0], c[:span1][0]].min }.min
   hi_d = o[:clouds].map { |c| [c[:span0][1], c[:span1][1]].max }.max
@@ -644,6 +707,14 @@ define :play_cloud_phase do |o|
   # --- 1. the whole timeline is built in the parent thread ---
   events = []
   o[:clouds].each_with_index do |c, ci|
+    # A ZERO DENSITY IS SILENCE, and it has to be said explicitly. The interval
+    # draw below is -log(1 - rand) / (lambda * shape): at lambda 0 that is
+    # Infinity for every rand but one, which breaks the loop harmlessly - and
+    # NaN when rand comes back exactly 0.0, because then it is 0 / 0. NaN >= dur
+    # is FALSE, so the `break` never fires and the loop spins forever inside a
+    # live_loop: the zone goes silent, stays silent, and nothing errors. Rare
+    # per block, certain over an installation day.
+    next if c[:lambda].to_f <= 0.0
     # shape = the Erlang order: the sum of `shape` exponential intervals, at
     # the same mean density. shape 1 = pure Poisson - natural, but CLUMPY:
     # exponential gaps have no upper bound, so long silences appear on a
@@ -706,8 +777,11 @@ define :play_cloud_phase do |o|
       else
         pos = rrand(lo, hi)
       end
-      # on a smaller rig, compress the whole drawing onto the outputs available
-      pos = 1.0 + (pos - lo_d) * (o[:rig] - 1) / (hi_d - lo_d) if o[:rig] < hi_d
+      # on a smaller rig, compress the whole drawing onto the outputs available.
+      # A ring has one more INTERVAL than it has speakers - the one from the
+      # last back round to the first - so it folds onto rig, not rig - 1.
+      fold_span = cyclic ? o[:rig] : o[:rig] - 1
+      pos = 1.0 + (pos - lo_d) * fold_span / (hi_d - lo_d) if fold && o[:rig] < hi_d
 
       ch   = pos.floor
       frac = pos - ch
@@ -721,6 +795,13 @@ define :play_cloud_phase do |o|
       entry_cap = o[:entry_amp] || 1.0
       gain = entry_cap + (1.0 - entry_cap) * f
       intensity = rrand(o[:amp_lo], o[:amp_hi]) * gain
+      if xfade > 0.0
+        if t < xfade
+          intensity *= Math.sqrt(t / xfade)
+        elsif t > o[:dur] - xfade
+          intensity *= Math.sqrt((o[:dur] - t) / xfade)
+        end
+      end
       # constant power: amp_a^2 + amp_b^2 = intensity^2
       amp_a = intensity * Math.cos(frac * Math::PI / 2)
       amp_b = intensity * Math.sin(frac * Math::PI / 2)
@@ -761,10 +842,10 @@ define :play_cloud_phase do |o|
         # p_upper == 0: the pick can never be ch + 1, which is off the rig.
         # Same guard the continuous branch gets from `amp_b > 0.05`.
         pick = (rand < p_upper) ? ch + 1 : ch
-        events << ev.merge(chan: pick, amp: intensity) if intensity > 0.05
+        events << ev.merge(chan: out.call(pick), amp: intensity) if intensity > 0.05
       else
-        events << ev.merge(chan: ch,     amp: amp_a) if amp_a > 0.05
-        events << ev.merge(chan: ch + 1, amp: amp_b) if amp_b > 0.05
+        events << ev.merge(chan: out.call(ch),     amp: amp_a) if amp_a > 0.05
+        events << ev.merge(chan: out.call(ch + 1), amp: amp_b) if amp_b > 0.05
       end
     end
   end
@@ -825,7 +906,7 @@ define :play_cloud_phase do |o|
                        amp: e[:amp], rate: e[:rate], lpf: e[:lpf],
                        attack: 0.01, release: 0.06
               end
-              sleep o[:dur] - prev
+              sleep o[:dur] - prev + fx_tail
             end
 
             if bl[:hi_from].abs < 0.01 && bl[:hi_to].abs < 0.01
@@ -847,7 +928,10 @@ define :play_cloud_phase do |o|
     end
   end
 
-  sleep o[:dur]
+  # NOT o[:dur]. The channel threads above run to dur on their own; returning
+  # xfade early is what makes the next block start underneath this one's tail.
+  # At xfade 0 - every MX caller - this is exactly the old behaviour.
+  sleep o[:dur] - xfade
 end
 
 # 1c. THE SPILL - the exhale's last grains carried over the boundary
@@ -975,10 +1059,315 @@ define :play_spill do |o|
   end
 end
 
+# 1c-bis. NOMOS - TNB's Zone IV
+#
+# Nomos Alpha (1966): a finite set of sonic complexes, the ROTATION GROUP OF
+# THE CUBE acting on them, and a deterministic sequence of group elements, so
+# material comes back recognisably transformed rather than merely recurring.
+#
+# WHY NOT D4, WHICH THIS WAS. The first rebuild used D4, the symmetry group of
+# the SQUARE, on the grounds that the quad is the cube's horizontal section.
+# That is true and it is not enough: projecting the cube onto a horizontal
+# plane collapses 24 rotations into 8 and throws away the dimension that tells
+# a rotation from a reflection. Judged in the room - "the axial panning does
+# not feel like a cube" - and the verdict is correct, because with four
+# horizontal speakers and no height there is no cube there to feel. Turning a
+# square is turning a square.
+#
+# SO THE CUBE GETS ITS THIRD DIMENSION BACK, from the one place this piece has
+# ever had height: Blauert's directional bands. MX fakes a 4 m ceiling over
+# twelve monitors at 1.8 m with a band pair (+9 dB at 8372 Hz = above, -6 dB at
+# 3136 Hz = behind/below, both one octave wide - README 5). The same fiction
+# carries the cube's z axis here.
+#
+#   a vertex (x, y, z) of the cube, x,y,z in {-1,+1}
+#     (x, y)  ->  which of the four speakers      - real, physical
+#       z     ->  Blauert tilt, above or below    - psychoacoustic
+#
+# All 24 rotations are then genuinely distinct, and three kinds of move sound
+# like three different things:
+#
+#   about the VERTICAL axis    the figure turns round the room, height unchanged
+#   about a HORIZONTAL axis    the figure turns over - what was above is below,
+#                              and the complex plays BACKWARDS
+#   about a BODY DIAGONAL      height and horizontal extent TRADE PLACES: the
+#                              top face, four speakers at one height, becomes a
+#                              side face, two speakers at two heights
+#
+# That last one is the cube-specific move and the reason for all of this. No
+# rotation of a square can do it, because a square has nothing to trade.
+#
+# RETROGRADE IS NOW GEOMETRIC, not a separate rule: a complex plays backwards
+# exactly when the rotation sends the top face's normal below the horizon, i.e.
+# when the figure has been turned over. Reflections are not used at all - the
+# group is the 24 ROTATIONS, as in Nomos Alpha, not the full 48 with mirrors.
+#
+# FIVE COMPLEXES, each a feature of the cube rather than a list of speakers:
+#
+#   :point   one vertex                              ~0.2 s   1 event
+#   :burst   an edge of the top face, 2 vertices     ~0.5 s   6 events
+#   :line    a path along three vertices             ~1.6 s   ~22 events
+#   :held    a whole FACE, 4 vertices                ~3.2 s   ~80 events
+#   :rest    silence, which is a complex and not an absence
+#
+# A 16x range of duration and an 80x range of density. :rest is in the alphabet
+# deliberately - Nomos Alpha is sectional, and a Poisson process cannot make a
+# silence that means anything because every gap is just a gap.
+#
+# NO RANDOMNESS IN THE STRUCTURE. The complex sequence and the rotation
+# sequence are fixed words read cyclically. Chance is confined to which cut of
+# the pool each grain takes - the texture inside a complex - so the form is
+# deterministic and repeats, and the surface never does.
+define :play_nomos_phase do |o|
+  base      = o[:chan_base] || 0
+  pool      = o[:pool]
+  amp       = o[:amp] || 1.0
+  pace      = o[:pace] || 1.0
+  enh_thr   = o[:enh_thr]   || 0.2
+  enh_below = o[:enh_below] || 1.0
+  enh_above = o[:enh_above] || 1.0
+  step      = o[:step]
+  bl        = o[:blauert]
+  # The band pair costs per-sample work even at 0 dB, so it is SKIPPED rather
+  # than instantiated flat - the same reason xen_blauert is an off switch and
+  # not a trim (see play_cloud_phase).
+  height    = bl ? (bl[:amt] || 0.0) : 0.0
+
+  # --- the rotation group of the cube ---------------------------------------
+  # An element is [perm, signs], acting as v'[i] = signs[i] * v[perm[i]] - a
+  # signed permutation matrix. Those with determinant +1 are exactly the 24
+  # rotations; determinant -1 would give the 24 mirrors, which Nomos Alpha does
+  # not use.
+  #
+  #   (A B) v = A (B v)
+  #   (Bv)[j]      = sb[j] * v[pb[j]]
+  #   (A(Bv))[i]   = sa[i] * sb[pa[i]] * v[pb[pa[i]]]
+  r_mul = lambda do |a, b|
+    pa, sa = a
+    pb, sb = b
+    [[pb[pa[0]], pb[pa[1]], pb[pa[2]]],
+     [sa[0] * sb[pa[0]], sa[1] * sb[pa[1]], sa[2] * sb[pa[2]]]]
+  end
+  r_at = lambda do |e, v|
+    pp, ss = e
+    [ss[0] * v[pp[0]], ss[1] * v[pp[1]], ss[2] * v[pp[2]]]
+  end
+  ident = [[0, 1, 2], [1, 1, 1]]
+  # 90 degrees about each axis, right-handed:
+  #   X: (x,y,z) -> (x, -z,  y)
+  #   Y: (x,y,z) -> (z,  y, -x)
+  #   Z: (x,y,z) -> (-y, x,  z)
+  gens = { "X" => [[0, 2, 1], [1, -1, 1]],
+           "Y" => [[2, 1, 0], [1, 1, -1]],
+           "Z" => [[1, 0, 2], [-1, 1, 1]] }
+
+  # "Z X2 Y Z3" - a letter and an optional power. Parsed here rather than at
+  # the call site because this is where the group lives.
+  word = o[:word].to_s.split.map do |w|
+    g = gens[w[0].upcase] || ident
+    n = w[1..].to_i
+    n = 1 if n < 1
+    e = ident
+    n.times { e = r_mul.call(g, e) }
+    e
+  end
+  word = [gens["Z"]] if word.empty?
+  seq  = o[:seq].to_s.split
+  seq  = ["point"] if seq.empty?
+
+  # The complex index gains one EXTRA step every `shear`, and a five-step
+  # register pattern advances every `tilt_every`. Both are sieves over the
+  # index, not randomisations of it: see README 11c for why coprime word
+  # lengths alone are not enough to keep this off a short loop.
+  shear      = (o[:shear] || 5).to_i
+  # --- TWO BRAKES ON THE TOP END -------------------------------------------
+  #
+  # Three multipliers stack on a grain's playback rate: where the reference
+  # vertex landed (x0.84..x1.19), the register sieve (x0.63..x1.587 at tilt
+  # 4.0) and the complex's own contour (:line glides x0.80..x1.60). Measured,
+  # the product reaches x3.02 - PLUS NINETEEN SEMITONES - and 3.4% of grains sat
+  # above +12. Judged in the room as "high pitched sounds, quite disturbing",
+  # and it is: shatter material transposed up a twelfth is a shriek.
+  #
+  # Worse, the two effects REINFORCE. :line ramps its filter up alongside the
+  # glide, so the brightest transposition arrives with the filter at its most
+  # open - 7459 Hz. Nothing downstream catches it: the tanh is a soft ceiling
+  # on level, not on spectrum.
+  #
+  # rate_max caps the STATIC part only, so each complex keeps its own internal
+  # shape. Capping the final rate instead would flatten the top of every
+  # glissando, which is the gesture, not the fault.
+  rate_max   = o[:rate_max] || 2.0
+  # bright: how far the filter follows the transposition DOWN. A grain played
+  # at rate r has its whole spectrum shifted up by 12*log2(r), so dropping the
+  # cutoff by the same amount holds the perceived brightness constant; at 0.7 a
+  # glissando still opens up, just not without limit. One-sided deliberately -
+  # it never OPENS the filter for a slowed grain, or :held's dark sustain would
+  # brighten, and :held is not what anyone complained about.
+  bright     = o[:bright] || 0.7
+  tilt       = o[:tilt] || 4.0
+  tilt_every = (o[:tilt_every] || 13).to_i
+  tilts      = [0, 1, -1, 2, -2]
+
+  # Which speaker a vertex's horizontal position names, counterclockwise from
+  # the (+,+) corner. The four speakers ARE the cube's four vertical edges.
+  corner = lambda do |v|
+    if    v[0] > 0 && v[1] > 0 then 1
+    elsif v[0] < 0 && v[1] > 0 then 2
+    elsif v[0] < 0 && v[1] < 0 then 3
+    else                            4
+    end
+  end
+
+  span  = { point: 0.18, burst: 0.50, line: 1.60, held: 3.20, rest: 1.40 }
+  # The largest factor each complex applies to tr on its own - :burst climbs to
+  # 1.5 across its six grains, :line glides to 1.6, :held halves. Dividing the
+  # cap by this is what keeps the contour intact while bounding the absolute top.
+  contour = { point: 1.0, burst: 1.5, line: 1.6, held: 0.5, rest: 1.0 }
+  # Cube features, stated on the TOP face so that a rotation has somewhere to
+  # take them. :held is a whole face - the one complex wide enough for the
+  # body-diagonal trade to be audible as a change of shape rather than of place.
+  feat = { point: [[1, 1, 1]],
+           burst: [[1, 1, 1], [-1, 1, 1]],
+           line:  [[1, 1, 1], [-1, 1, 1], [-1, -1, 1]],
+           held:  [[1, 1, 1], [-1, 1, 1], [-1, -1, 1], [1, -1, 1]],
+           rest:  [] }
+
+  cuts_all   = pool[:cuts]
+  cuts_short = cuts_all.select { |c| c[:ms] <= 70.0 }
+  cuts_short = cuts_all if cuts_short.empty?
+  cuts_long  = cuts_all.select { |c| c[:ms] >= 110.0 }
+  cuts_long  = cuts_all if cuts_long.empty?
+
+  g = o[:g] || ident
+  events = []
+  t = 0.0
+  while t < o[:dur]
+    kind = seq[(step + (shear > 0 ? step / shear : 0)) % seq.size].to_sym
+    g    = r_mul.call(g, word[step % word.size])
+    vs   = feat[kind].map { |v| r_at.call(g, v) }
+    # Turned over: the top face's normal now points below the horizon. The
+    # complex plays backwards, and this is the only retrograde rule - it falls
+    # out of the geometry instead of being bolted on.
+    flip = r_at.call(g, [0, 0, 1])[2] < 0
+    vs   = vs.reverse if flip
+    cd   = span[kind] * pace
+    # Transposition from where the reference vertex landed, plus the register
+    # sieve. Four corners across a tritone, so the four horizontal positions of
+    # a figure are four distinct registers of it.
+    tr   = 2.0 ** ((corner.call(r_at.call(g, [1, 1, 1])) * 2.0 - 5.0) / 12.0)
+    tr  *= 2.0 ** (tilts[(tilt_every > 0 ? step / tilt_every : 0) % 5] * tilt / 12.0)
+    tr   = [tr, rate_max / contour[kind]].min
+
+    add = lambda do |dt, vtx, rate, lpf, a, cut|
+      # The filter follows the transposition down, never up. lpf here is a MIDI
+      # note, so the correction is in the same units as the transposition.
+      lpf -= bright * 12.0 * Math.log2(rate) if rate > 1.0
+      events << { t: t + dt, chan: corner.call(vtx) + base, z: vtx[2],
+                  wav: pool[:wav], start: cut[:start], finish: cut[:finish],
+                  rate: rate, lpf: lpf, amp: a * amp,
+                  attack: kind == :held ? 0.05 : 0.004,
+                  release: kind == :held ? 0.12 : 0.07 }
+    end
+
+    case kind
+    when :point
+      add.call(0.0, vs[0], tr, 112, 0.42, cuts_short.choose)
+    when :burst
+      6.times do |i|
+        f = i / 5.0
+        add.call(f * cd * 0.8, vs[i % vs.size], tr * (1.0 + 0.10 * i), 116,
+                 0.30 * (1.0 - 0.4 * f), cuts_short.choose)
+      end
+    when :line
+      n = (cd / 0.07).floor
+      n.times do |i|
+        f  = i.to_f / [n - 1, 1].max
+        fr = flip ? 1.0 - f : f
+        add.call(f * cd, vs[(f * (vs.size - 1)).round],
+                 tr * (0.80 + 0.80 * fr), 108 + (10 * fr).round,
+                 0.26, cuts_short.choose)
+      end
+    when :held
+      n = (cd / 0.04).floor
+      n.times do |i|
+        f = i.to_f / [n - 1, 1].max
+        # A sustain built from overlap: 150 ms cuts at 40 ms spacing is ~4
+        # voices deep, and rate 0.5 doubles each one's length again.
+        env = [[f * 6.0, 1.0].min, (1.0 - f) * 4.0, 1.0].min
+        add.call(f * cd, vs[i % vs.size], tr * 0.50, 96, 0.17 * env, cuts_long.choose)
+      end
+    when :rest
+      # Nothing. The silence is the complex.
+    end
+
+    t += cd
+    step += 1
+  end
+  events.sort_by! { |e| e[:t] }
+
+  # --- play it, one persistent chain per (speaker, height) ------------------
+  # Grouped by height as well as channel, because the band pair IS the height:
+  # a side face puts two vertices above and two below on the same two speakers,
+  # and they must not share a chain or the cue cancels. Eight chains at most,
+  # and the pair is set once per chain rather than per grain - the same economy
+  # play_cloud_phase gets from holding its chain for a whole phase.
+  events.group_by { |e| [e[:chan], e[:z]] }.each do |(ch, z), mine|
+    in_thread do
+      with_fx :sound_out, output: ch, amp: 0 do
+        with_fx :compressor, threshold: enh_thr, slope_below: enh_below,
+                            slope_above: enh_above, clamp_time: 0.01,
+                            relax_time: 0.25 do
+          with_fx :tanh, krunch: 0.25, amp: get(:xen_out_headroom, 1.0) do
+            play = lambda do
+              prev = 0.0
+              mine.each do |e|
+                sleep e[:t] - prev
+                prev = e[:t]
+                sample e[:wav], start: e[:start], finish: e[:finish],
+                       amp: e[:amp], rate: e[:rate], lpf: e[:lpf],
+                       attack: e[:attack], release: e[:release]
+              end
+              sleep t - prev
+            end
+            if height > 0.001
+              # Inside the tanh, as everywhere else in this piece: the boost is
+              # part of what the ceiling has to catch, not something added
+              # after it.
+              with_fx :band_eq, freq: bl[:hi_note], res: bl[:res],
+                                db: bl[:hi_db] * z do
+                with_fx :band_eq, freq: bl[:lo_note], res: bl[:res],
+                                  db: bl[:lo_db] * z do
+                  play.call
+                end
+              end
+            else
+              play.call
+            end
+          end
+        end
+      end
+    end
+  end
+
+  # t, not o[:dur]: a complex is never cut in half at a block boundary, so the
+  # block is as long as the complexes that filled it.
+  sleep t
+  { step: step, g: g }
+end
+
 # 1d. THE ATMOSPHERE LOADER THREAD
 # Prepares the next cycle's set and frees the set from TWO cycles ago - not
 # the previous one, which might still be sounding on its tail.
 live_loop "atmos_loader_#{run_tag}".to_sym do
+  # TNB HAS NO BREATH. Its two zones are their own loops at the foot of this
+  # file and drive the same scsynth outputs, so this one must not also run -
+  # nothing would error, the two pieces would simply sum on channels 1-8.
+  if get(:xen_venue, :mx) != :mx
+    sleep 1
+    next
+  end
+
   # Administrative loop: triggers no sound, so it needs no precision.
   # Was 60, to stop a TimingError killing the loop during the sample load.
   # But sched_ahead is also how long every `set` in this thread parks a raw
@@ -1028,6 +1417,14 @@ end
 # evolves from one breath to the next, but the whole run repeats identically
 # on a new Run. Changing the seed requires Stop + Run.
 live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
+  # TNB HAS NO BREATH. Its two zones are their own loops at the foot of this
+  # file and drive the same scsynth outputs, so this one must not also run -
+  # nothing would error, the two pieces would simply sum on channels 1-8.
+  if get(:xen_venue, :mx) != :mx
+    sleep 1
+    next
+  end
+
 
   # SCHEDULING LOOKAHEAD - left at Sonic Pi's default, deliberately.
   #
@@ -1856,4 +2253,271 @@ live_loop "xenakis_installation_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
   end
 
   sleep gap # the stochastic breathing void
+end
+
+# ============================================================================
+# 3. TNB - TWO ZONES, NO BREATH
+# ============================================================================
+#
+# A different piece on the same engine. MX is one 16 s (desk: 32 s) breath for
+# an audience sitting in a hall; TNB is two continuous states in the Hol of
+# Corp B that a visitor walks between, for as long as the building is open.
+# Nothing above this line runs here - no inhale, no exhale, no M=0, no vacuum,
+# no void, no spill. What is shared is the grain engine, the pools, the
+# enhancer and the output headroom.
+#
+# EIGHT OUTPUTS, TWO QUADS.
+#   Zone I  - outputs 1-4 - "nor stocastic comprimat", the Pithoprakta reading
+#   Zone IV - outputs 5-8 - "camp fragmentat / retea probabilistica"
+#
+# They are the two ENDS of Carmen Petrea's four-zone progression - point-cloud
+# and graph, gas and constellation - with the two middle zones (the Metastaseis
+# bundle and the Philips surface) not built. That is the maximum contrast two
+# quads can carry, and both of her zones are rooted in quadraphony: Zone I is
+# tagged "origine: quadrofonie -> masa", Zone IV "quasi-quadrofonic -> memorie
+# istorica". The same four-channel format read in opposite directions.
+#
+# THE ONLY SETTING THAT SEPARATES THEM is xen_pan_mode - :continuous for the
+# mass, :discrete for the network - which is why the two quads are rigged at
+# different SIZES: Zone I tight (5-6 m), so four speakers fuse into a volume,
+# Zone IV wide (8-10 m), so each one stays legible as its own point. Half the
+# distinction is in the room, not in here.
+#
+# NO GLOBAL PERIOD. MX's cycle is meant to be heard as a cycle. Here the
+# opposite: the zones free-run in their own loops at different block lengths,
+# and what evolves inside each one is a RANDOM WALK rather than an oscillator,
+# so there is no period to lock to and nothing for a visitor walking the
+# corridor to catch repeating.
+#
+# NOT YET BUILT: the atmosphere beds. Zone I would take them (a bed under a
+# dense mass is the obvious thickener) but the bed machinery upstairs - stretch
+# to the cycle, the spectral partials, the rotation, the decorrelated pairs -
+# is written against cycle_dur and has no meaning without a breath. Grains
+# only, for now, in both zones. Zone IV should never have beds: continuity is
+# precisely what it is specified not to have.
+
+if get(:xen_venue, :mx) == :tnb
+  tnb_sched = get(:xen_sched_ahead, 0.5)
+
+  # --- ZONE I --------------------------------------------------------------
+  #
+  # "Un volum compact, fara directie privilegiata, perceput ca presiune
+  #  spatiala." Mii de puncte, cu variatii locale de densitate.
+  #
+  # Two overlapping clouds on a RING of four, scattered and continuously
+  # panned, with a STATIC span - the window does not travel, because there is
+  # no breath for it to travel down. What moves instead is the window itself:
+  # each cloud's centre random-walks around the ring between blocks, one broad
+  # and one narrow, so the density thickens and thins locally and the thick
+  # part wanders. That is the honest reading of "variatii locale de densitate"
+  # on four horizontal speakers.
+  #
+  # WHY NOT A GAUSSIAN, which is what the brief literally says. A Gaussian over
+  # a quad's channel coordinate puts its peak on one side of the room and keeps
+  # it there - a permanent privileged direction, the one thing this zone is
+  # specified not to have. The brief's Gaussian is a distribution in a VOLUME,
+  # and a volume is what four horizontal speakers cannot render. A drifting
+  # window gives the same local thickening without nailing it to a compass
+  # point, and the ring makes the distribution uniform over time.
+  z1_centres = [1.4, 3.6]
+  z1_widths  = [1.7, 0.9]
+  # The floor draws only LONG cuts. Measured, the pools average 84 ms and about
+  # 30% of their cuts run past 110 ms; at the floor's ~10 grains/s/channel the
+  # onsets are ~100 ms apart, so long grains make the cover overlap rather than
+  # merely adjoin - the difference between a mass and a fast stream of points.
+  # Hoisted out of the loop: this filters ~2400 cuts and the result never
+  # changes.
+  z1_floor_pool = { wav: pool_exhale_pressure[:wav],
+                    cuts: pool_exhale_pressure[:cuts].select { |c| c[:ms] >= 110.0 } }
+  z1_floor_pool = pool_exhale_pressure if z1_floor_pool[:cuts].empty?
+
+  live_loop "tnb_zone1_#{run_tag}".to_sym, seed: get(:xen_seed, 0) do
+    use_sched_ahead_time tnb_sched
+
+    blk     = get(:tnb_z1_block, 11.0)
+    focus   = get(:tnb_focus, :all)
+    dens    = get(:tnb_z1_density, 56.0) * get(:xen_density, 1.0)
+    amp     = get(:tnb_z1_amp, 1.0) * get(:xen_master_amp, 1.0)
+    drift   = get(:tnb_z1_drift, 0.8)
+    lpf     = get(:tnb_z1_lpf, 95)
+    rate    = get(:tnb_z1_rate, 0.9)
+    enhance = get(:xen_enhance, 0.4)
+
+    # Where each window ends up by the end of this block. play_cloud_phase
+    # interpolates span0 -> span1 across the block on rails, so handing it last
+    # block's centre and this block's makes the drift continuous ACROSS the
+    # boundary rather than jumping at it.
+    # NOT wrapped back into [1, 5). It is tempting, and it is wrong: span0 is
+    # last block's centre and span1 is this one's, and play_cloud_phase
+    # interpolates between them on rails - so a centre that wrapped 3.9 -> 0.1
+    # would send the window racing the long way round the ring inside one
+    # block. The coordinate stays unbounded and `out` wraps at render time
+    # instead. A random walk grows as sqrt(t), so an 8-hour day displaces it by
+    # ~41 ring units and a year would not threaten float precision.
+    # SOLO. The zone keeps its block time either way - it has to, or the drift
+    # below would stand still while the other zone ran on, and coming back from
+    # a solo would restart this one somewhere it never travelled to. Same rule
+    # the breath's xen_focus follows: muting changes what you hear, never the
+    # clock. The walk continues under a solo, so the zone you come back to has
+    # moved on exactly as if you had been listening.
+    unless [:all, :z1].include?(focus)
+      z1_centres = z1_centres.map { |c| c + rrand(-drift, drift) }
+      sleep blk
+      next
+    end
+
+    xf  = get(:tnb_z1_xfade, 1.2)
+    nxt = z1_centres.map { |c| c + rrand(-drift, drift) }
+    # WHERE THE WINDOW IS AT THE HANDOVER, not where it ends up. The block
+    # still travels span0 -> span1 across the whole of blk, but the next block
+    # starts xfade EARLY, so what it must begin from is this window's position
+    # at (blk - xfade) - otherwise the window jumps forward by xfade/blk of a
+    # drift step every block, which is a small systematic drift on top of the
+    # random one and would eventually show up as the thing never coming back.
+    hand = z1_centres.each_with_index.map { |c, i| c + (nxt[i] - c) * (blk - xf) / blk }
+    # --- THE FLOOR, and the reason this zone stopped having holes ----------
+    #
+    # FOUR clouds, one centred on each speaker, each with its own near-
+    # deterministic process. Measured over 18 blocks, the drifting windows
+    # alone left a channel silent for up to 805 ms - a listener standing by one
+    # speaker hears that as the mass stopping. The windows are 3.4 and 1.8 wide
+    # on a ring of 4, so between them they cover most of it, but WHICH channel
+    # each grain lands on is still a multinomial accident: a shared process
+    # cannot promise anything to any one speaker.
+    #
+    # A per-channel process can. At shape 16 the Erlang gaps are nearly even,
+    # so each speaker's silence is bounded by its own rate rather than by the
+    # tail of a distribution it shares with three others. Same total density,
+    # worst channel gap 805 ms -> 195 ms.
+    #
+    # The windows stay, on top, and are still what "variatii locale de
+    # densitate" means - they just thicken a floor now instead of being the
+    # whole of it.
+    floor  = get(:tnb_z1_floor, 0.70)
+    fshape = get(:tnb_z1_floor_shape, 16).to_i
+    shape  = get(:tnb_z1_shape, 6).to_i
+    clouds = (1..4).map do |k|
+      { span0: [k - 0.5, k + 0.5], span1: [k - 0.5, k + 0.5],
+        lambda: dens * floor / 4.0, shape: fshape, pool: z1_floor_pool }
+    end
+
+    pools = [pool_inhale_mid, pool_exhale_pressure]
+    # 0.65 / 0.35: the broad cloud carries the thickening, the narrow one is a
+    # denser knot moving through it.
+    shares = [0.65, 0.35]
+    (0...2).each do |i|
+      w = z1_widths[i]
+      clouds << { span0:  [z1_centres[i] - w, z1_centres[i] + w],
+                  span1:  [nxt[i] - w,        nxt[i] + w],
+                  lambda: dens * (1.0 - floor) * shares[i],
+                  # Not 1: pure Poisson gaps have no upper bound, so a mass this
+                  # dense still opens holes in itself. A gas has no holes.
+                  shape:  shape,
+                  pool:   pools[i] }
+    end
+    z1_centres = hand
+
+    play_cloud_phase clouds: clouds, dur: blk,
+                     rig: 4, ring: true, fold: false, chan_base: 0,
+                     pan_mode: :continuous, traj_mode: :scatter,
+                     pitch_from: rate, pitch_to: rate, pitch_jit: 0.05,
+                     lpf_from: lpf, lpf_to: lpf, lpf_jit: 4,
+                     xfade: get(:tnb_z1_xfade, 1.2),
+                     fx_tail: get(:tnb_z1_fx_tail, 0.35),
+                     amp_lo: 0.155 * amp, amp_hi: 0.31 * amp,
+                     enh_thr: get(:xen_enhance_threshold, 0.2),
+                     enh_below: enhance > 0 ? 1.0 + enhance * 0.5 : 1.0,
+                     enh_above: enhance < 0 ? 1.0 + enhance * 0.5 : 1.0
+  end
+
+  # --- ZONE IV ------------------------------------------------------------
+  #
+  # "O constelatie instabila, o harta care se rescrie." Formalism, nu gest.
+  #
+  #   tnb_z4_word   rotations of the cube, applied cumulatively. X Y Z are 90
+  #                 degrees about each axis; a digit raises the power, so "Z2"
+  #                 is a half-turn about the vertical. Height only moves when
+  #                 the word contains X or Y - a word of Z alone is the old
+  #                 square, turning.
+  #   tnb_z4_seq    complexes: point burst line held rest.
+  #
+  # Where Zone IV sits is resolved INSIDE the loop, below - never at load time.
+  # See the note there.
+  z4_base_said = nil
+  # The score's position. Identity to start, so the first figure is heard
+  # untransformed and everything after is heard AGAINST it.
+  z4_step = 0
+  z4_g    = nil
+
+  live_loop "tnb_zone4_#{run_tag}".to_sym, seed: get(:xen_seed, 0) + 1 do
+    use_sched_ahead_time tnb_sched
+
+    blk     = get(:tnb_z4_block, 13.0)
+    focus   = get(:tnb_focus, :all)
+    amp     = get(:tnb_z4_amp, 1.0) * get(:xen_master_amp, 1.0)
+    pace    = get(:tnb_z4_pace, 1.0)
+    enhance = get(:xen_enhance, 0.4)
+
+    # WHERE THIS ZONE SITS - read EVERY BLOCK, not once at load.
+    #
+    # This used to be computed at the top of the file, which meant it ran
+    # inside run_file in the reloader's thread, at the same logical instant the
+    # workspace was still doing its `set`s. If get(:xen_rig_outputs) missed and
+    # fell back to its default of 8, Zone IV addressed outputs 5-8 - and on the
+    # studio's 4-output rig NOTHING IS PATCHED THERE. The zone played perfectly
+    # into channels that reach no speaker: no sound, no error, and Zone I
+    # unaffected, so :all still made a noise and only :z4 was silent.
+    #
+    # Reading it here removes the race, and the clamp below removes the failure
+    # mode outright: a zone can no longer address a channel the rig does not
+    # have, whatever anyone sets.
+    rig = get(:xen_rig_outputs, 8).to_i
+    z4_base = (rig >= 8) ? 4 : 0
+    z4_base = 0 if z4_base + 4 > rig
+    if z4_base != z4_base_said
+      puts "XENAKIS/TNB: zone IV on outputs #{z4_base + 1}-#{z4_base + 4} " \
+           "(rig #{rig})#{z4_base.zero? && rig < 8 ? ' - FOLDED onto zone I' : ''}"
+      z4_base_said = z4_base
+    end
+
+    # THE CUBE'S Z AXIS, and the only height this rig has. Built here because
+    # the Blauert constants are file locals and `define` cannot see them - the
+    # same reason play_cloud_phase is handed its pair. README 10c measured this
+    # cue delivering about a third of what the number says, and costing timbre
+    # before it costs anything else, so the default is well under MX's 0.75.
+    hgt     = get(:tnb_z4_height, 0.5)
+    bl      = { hi_note: blauert_hi_note, lo_note: blauert_lo_note,
+                res: blauert_res, amt: hgt,
+                hi_db: blauert_hi_db * hgt, lo_db: blauert_lo_db * hgt }
+
+    # SOLO - and the step counter does NOT advance while muted, unlike Zone I.
+    # Zone I's drift is a memoryless random walk, so letting it run on costs
+    # nothing. This is a deterministic score: skipping through it while nobody
+    # is listening would throw away the one thing the zone exists for.
+    unless [:all, :z4].include?(focus)
+      sleep blk
+      next
+    end
+
+    st = play_nomos_phase pool: pool_exhale_shatter, dur: blk,
+                          chan_base: z4_base,
+                          step: z4_step, g: z4_g,
+                          word: get(:tnb_z4_word, "Z X Z2 Y Z3 X2 Z Y3"),
+                          seq:  get(:tnb_z4_seq, "held point burst rest line point burst"),
+                          shear: get(:tnb_z4_shear, 5).to_i,
+                          rate_max: get(:tnb_z4_rate_max, 2.0),
+                          bright: get(:tnb_z4_bright, 0.7),
+                          tilt: get(:tnb_z4_tilt, 4.0),
+                          tilt_every: get(:tnb_z4_tilt_every, 13).to_i,
+                          blauert: bl,
+                          amp: amp, pace: pace,
+                          enh_thr: get(:xen_enhance_threshold, 0.2),
+                          enh_below: enhance > 0 ? 1.0 + enhance * 0.5 : 1.0,
+                          enh_above: enhance < 0 ? 1.0 + enhance * 0.5 : 1.0
+    z4_step = st[:step]
+    z4_g    = st[:g]
+  end
+
+  puts "XENAKIS/TNB: zone I on outputs 1-4; zone IV (cube) reports its own " \
+       "outputs on its first block."
 end

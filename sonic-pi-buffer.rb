@@ -4,6 +4,7 @@
 # xenakis.rb is a library and doesn't get touched.
 # ============================================
 
+set :xen_venue, :mx        # :mx | :tnb - MUST be stated. README 11.
 set :xen_rig_outputs, 12   # 12 = Hala MX, 4 = UMC404HD in the studio
 set :xen_focus, :all       # :inhale :exhale :m0 :m0_ceil :m0_floor :all
 set :xen_layers, :both     # :both :atmos (beds only) :grains (granular only)
