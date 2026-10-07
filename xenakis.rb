@@ -2818,6 +2818,12 @@ if run_zones
   # merely adjoin - the difference between a mass and a fast stream of points.
   # Hoisted out of the loop: this filters ~2400 cuts and the result never
   # changes.
+  # The density exchange between the two drifting windows runs on its OWN clock,
+  # carried across blocks. Deriving it from within-block time would reset it
+  # every 11 s and shift nothing - the same mistake the Nicapetre lemniscate
+  # made, where a figure locked to its generation starved one speaker forever
+  # (README 12c).
+  z1_mix_phase  = 0.0
   z1_floor_pool = { wav: pool_exhale_pressure[:wav],
                     cuts: pool_exhale_pressure[:cuts].select { |c| c[:ms] >= 110.0 } }
   z1_floor_pool = pool_exhale_pressure if z1_floor_pool[:cuts].empty?
@@ -2893,9 +2899,27 @@ if run_zones
     end
 
     pools = [pool_inhale_mid, pool_exhale_pressure]
-    # 0.65 / 0.35: the broad cloud carries the thickening, the narrow one is a
-    # denser knot moving through it.
-    shares = [0.65, 0.35]
+    # THE SPLIT IS HALA MX'S INHALE, AND IT MOVES.
+    #
+    # MX's inhale is two clouds at lambda 24 and 8 - a 3:1 split, the broad one
+    # carrying the mass and the narrow one a denser knot travelling through it
+    # (cloud_positive / cloud_negative). That ratio is the rest position here.
+    #
+    # What is new is that the density now SHIFTS between them: at tnb_z1_mix 0
+    # it sits at MX's fixed 3:1, and at 1 it swings the whole way, each window
+    # taking its turn as the dense one. So "variatii locale de densitate" gains
+    # a second dimension - the thickening moves not only in position, which the
+    # drifting windows already do, but between the two clouds themselves.
+    #
+    # The TOTAL is untouched. Only the share moves, so the mass never thins and
+    # the per-channel floor below is never robbed - that floor is what keeps a
+    # speaker from going silent for 800 ms and it is not available for this.
+    mix   = get(:tnb_z1_mix, 0.6)
+    mper  = get(:tnb_z1_mix_period, 73.0)
+    share_a = 0.75 * (1.0 - mix) +
+              mix * (0.5 + 0.45 * Math.sin(2 * Math::PI * z1_mix_phase))
+    shares = [share_a, 1.0 - share_a]
+    z1_mix_phase = (z1_mix_phase + (blk - xf) / mper) % 1.0
     (0...2).each do |i|
       w = z1_widths[i]
       clouds << { span0:  [z1_centres[i] - w, z1_centres[i] + w],

@@ -42,6 +42,20 @@ set :tnb_z1_floor, 0.70    # share of that on the four PER-CHANNEL clouds.
 set :tnb_z1_floor_shape, 16 # Erlang order of the floor. 1 = Poisson, gaps
                            # unbounded; 16 is nearly even. Floor draws only
                            # cuts >= 110 ms so grains overlap, not adjoin.
+set :tnb_z1_mix, 0.6       # how far the density SHIFTS between the two drifting
+                           # windows. 0 = fixed at Hala MX's inhale ratio, which
+                           # is 3:1 (its two clouds run lambda 24 and 8); 1 =
+                           # the full swing, each window taking its turn as the
+                           # dense one. The TOTAL never changes, so the mass
+                           # does not thin and the per-channel floor is never
+                           # robbed to pay for it.
+set :tnb_z1_mix_period, 73.0 # seconds per exchange, on its own clock carried
+                           # across blocks. Not a ratio of tnb_z1_block (11) or
+                           # of the 9.8 s handover.
+                           # Only 30% of the density is in the windows, so the
+                           # swing moves at most that much - lower tnb_z1_floor
+                           # if it needs to be more than a shimmer, and
+                           # re-measure the channel gaps afterwards.
 set :tnb_z1_shape, 6       # Erlang order of the drifting windows. Lower on
                            # purpose - even variation is not variation.
 set :tnb_z1_xfade, 1.2     # seconds blocks OVERLAP. Without it the zone has a

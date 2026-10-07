@@ -2497,6 +2497,39 @@ speaker**, each with its own near-deterministic process at `shape 16`, carrying
 *"variații locale de densitate"* means — they thicken a floor now instead of
 being the whole of it.
 
+#### The split is Hala MX's inhale, and it moves
+
+MX's inhale is two clouds at **λ24 and λ8** — a 3:1 split, the broad one
+carrying the mass and the narrow one a denser knot travelling through it
+(`cloud_positive` / `cloud_negative`). That ratio is Zone I's rest position.
+
+What is new is that the density **shifts between them**. At `tnb_z1_mix 0` it
+sits at MX's fixed 3:1; at 1 it swings the whole way and each window takes its
+turn as the dense one. So *"variații locale de densitate"* gains a second
+dimension — the thickening moves not only in position, which the drifting
+windows already did, but between the two clouds themselves.
+
+`tnb_z1_mix_period` (73 s) runs on its **own clock, carried across blocks**.
+Deriving it from within-block time would reset it every 11 s and shift nothing
+— the same mistake the Nicăpetre lemniscate made, where a figure locked to its
+generation starved one speaker forever (§12c).
+
+**The total is untouched.** Only the share moves, so the mass never thins and
+the per-channel floor is never robbed to pay for it — that floor is what keeps
+a speaker from going silent for 800 ms and it is not available for this.
+Measured with the shift running at 0.6, swinging 0.33 → 0.87:
+
+| | before the floor existed | with the shift running |
+|---|---|---|
+| longest silence, one channel | 898 ms | **213 ms** |
+| longest silence, whole rig | 232 ms | **95 ms** |
+| density dip per 0.5 s bin | 45% | **68%** |
+
+Only 30% of the density sits in the windows, so the swing moves at most that
+much. If it needs to be more than a shimmer the lever is `tnb_z1_floor` — and
+the channel gaps need re-measuring afterwards, because that is exactly the
+trade it makes.
+
 **2. The density was MX's, and MX is a different problem.** 26 grains/s was the
 same per-channel density as MX's inhale. But MX's clouds are a *gesture crossing
 a hall*; this is a *standing mass* that someone parks next to. 56.
